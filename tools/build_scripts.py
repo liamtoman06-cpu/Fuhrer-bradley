@@ -15,7 +15,10 @@ for i, (cls, name, fname, ctx) in enumerate(items):
     if ctx:
         props += [f'<token name="RunContext">{ctx}</token>', '<bool name="Disabled">false</bool>']
     props.append(f'<ProtectedString name="Source"><![CDATA[{src}]]></ProtectedString>')
-    out.append(f'<Item class="{cls}" referent="RBX{i + 2:06d}"><Properties>' + "".join(props) + "</Properties></Item>")
+    # version marker: BossServer replaces scripts without it (left over from an older install)
+    marker = (f'<Item class="BoolValue" referent="RBX{i + 2:04d}MK"><Properties><string name="Name">KingBradleyV3</string>'
+              '<bool name="Value">true</bool></Properties></Item>')
+    out.append(f'<Item class="{cls}" referent="RBX{i + 2:06d}"><Properties>' + "".join(props) + "</Properties>" + marker + "</Item>")
 out.append("</Item></roblox>")
 open(os.path.join(ROOT, "KingBradleyScripts.rbxmx"), "w", encoding="utf-8").write("\n".join(out))
 print("KingBradleyScripts.rbxmx written")

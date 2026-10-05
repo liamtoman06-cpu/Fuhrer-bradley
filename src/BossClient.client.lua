@@ -33,9 +33,14 @@ local function claimedModel(): Model?
 	return if p and p:IsA("Model") and p:GetAttribute("BradleyBoss") == true then p else nil
 end
 local model = claimedModel()
+local waited = 0
 while not model do
 	-- still in the KingBradleyScripts folder: BossServer is about to move this script into the boss
 	task.wait(0.25)
+	waited += 0.25
+	if waited == 15 then
+		warn("[Bradley] BossClient is still waiting for BossServer to set King Bradley up: read the server's [Bradley] lines in Output")
+	end
 	model = claimedModel()
 end
 while not model:IsDescendantOf(workspace) do
@@ -89,16 +94,21 @@ local I = CFrame.identity
 -- =============================================================================================
 -- 2. Rig
 -- =============================================================================================
+local readyWait = 0
 while not model:GetAttribute("RigReady") do
 	if not model:IsDescendantOf(workspace) then
 		return
 	end
 	task.wait(0.2)
+	readyWait += 1
+	if readyWait == 75 then
+		warn("[Bradley] King Bradley is not set up yet (no RigReady after 15 s): read the server's [Bradley] lines in Output")
+	end
 end
-local hrp = model:WaitForChild("HumanoidRootPart", 10)
-if not (hrp and hrp:IsA("BasePart")) then
-	warn("[Bradley] BossClient: the model has no HumanoidRootPart")
-	return
+local hrp = model:FindFirstChild("HumanoidRootPart")
+while not (hrp and hrp:IsA("BasePart") and hrp:GetAttribute("BradleyRoot")) do
+	model.ChildAdded:Wait()
+	hrp = model:FindFirstChild("HumanoidRootPart")
 end
 local humanoid = model:FindFirstChildOfClass("Humanoid")
 local S = model:GetAttribute("RigScale")

@@ -31,29 +31,34 @@ The model is an improved version of the premade Bradley design:
 
 ## Install
 
-1. **Import the model.** In Roblox Studio, open **File → Import 3D** (or Avatar → Import 3D) and pick
-   `model/KingBradley.fbx`.
-   * Keep the **rig**: Rig Type **Custom**, never "No Rig".
-   * Do **not** tick "Merge Meshes".
-   * The import should give a Model with MeshParts and `Bone` objects such as `B_Hips`, `B_Chest`
-     and `B_Cape3_2`.
-   * Size and height don't matter. The server scales him to `Config.TargetHeight` (9 studs) and
-     drops him onto the ground below him.
+1. **Import the model.** In Roblox Studio, open **File → Import 3D** and pick
+   `model/KingBradley.fbx`. In the import window:
+   * keep **Rig Type: Custom** (never "No Rig");
+   * leave **Merge Meshes** off;
+   * keep **Scale Unit: Studs**;
+   * optionally tick **Keep Zero Influence Bones** (if you don't, the scripts rebuild the three
+     bones the importer drops).
+
+   You get a Model with MeshParts and `Bone` objects (`B_Hips`, `B_Chest`, …). In edit mode he
+   hangs wherever the importer dropped him, often in mid-air. That's normal: when the game starts,
+   the server scales him to 9 studs and stands him on the floor below him.
 2. **Insert the scripts.** Right-click **Workspace → Insert from File…** and pick
-   `KingBradleyScripts.rbxmx`. That's it: you don't need to move anything. When the game starts,
-   the scripts find the imported model by themselves (the Model holding the `B_Hips` bone) and
-   move themselves into it.
-3. **Place him.** Move him to where the fight should happen and turn him to face where he should
-   stand guard. That spot is his home: he returns there and resets when players flee past
-   `LeashRange`.
-4. **Press Play.** The Output window (View → Output) should show:
+   `KingBradleyScripts.rbxmx`. You don't need to move anything. When the game starts, the scripts
+   find the imported model by themselves (the Model holding the `B_Hips` bone) and move into it.
+   If you placed scripts from an older version inside him, they are replaced automatically.
+3. **Place him.** Move him above the spot where the fight should happen (any height) and turn him
+   to face where he should stand guard. That spot is his home: he returns there and resets when
+   players flee past `LeashRange`.
+4. **Press Play (F5)**, not Run (F8). Run has no player, so nothing animates. The Output window
+   (View → Output) should show:
    ```
-   [Bradley] ready: Workspace.KingBradley, 69 meshes, 49 bones, 9.0 studs tall
+   [Bradley] ready: Workspace.KingBradley, 69 meshes (69 skinned), 49 bones, 9.0 studs tall, hip height 4.0
    ```
    If it shows a `[Bradley] SETUP PROBLEM` line instead, that line says exactly what to fix.
 
-Nothing needs to be uploaded to the animation editor. The scripts also work when you drop them
-straight into the model, or put the folder in ServerScriptService.
+Keep only one imported copy of him in the Workspace: delete failed imports. The scripts also
+work when the folder is in ServerScriptService, and the boss is never streamed out in places
+with StreamingEnabled.
 
 ### Colours
 
@@ -182,10 +187,12 @@ Damage and targeting:
 
 | What you see | Cause and fix |
 |---|---|
-| He floats where he was imported and never moves | The scripts never started. Check that `KingBradleyScripts` (or its six scripts) is in Workspace or ServerScriptService, and read the `[Bradley]` lines in Output. |
-| `SETUP PROBLEM: found King Bradley's meshes ... but no bones` | He was imported without his skeleton. Delete him and import again with the rig kept (Rig Type Custom) and Merge Meshes off. |
-| `SETUP PROBLEM: could not find King Bradley` | The imported model isn't in the Workspace, or the import has no `B_Hips` bone. |
-| `there is no ground under King Bradley` | Place him above a floor, terrain or the Baseplate. |
+| He hangs in the air in edit mode | Normal: he is put on the floor when you press Play. |
+| He floats or doesn't move in Play | Read the `[Bradley]` lines in Output. No line at all means the scripts are not in the game: insert `KingBradleyScripts.rbxmx` into Workspace. |
+| No animations, but he moves | You pressed Run (F8) instead of Play (F5), or he was imported without his rig (Output says so). |
+| `SETUP PROBLEM: found King Bradley's meshes ... but no bones` / `none of his meshes are skinned` | He was imported without his skeleton. Delete him and import again with Rig Type Custom and Merge Meshes off. |
+| `SETUP PROBLEM: there is no floor under King Bradley` | Move him above a floor, terrain or the Baseplate. |
+| `already run by another copy of the King Bradley scripts` | Two KingBradleyScripts folders: delete one. |
 
 ## Not verifiable outside Studio
 

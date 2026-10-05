@@ -229,7 +229,7 @@ Config.Colors = {
 }
 
 return Config
-]]></ProtectedString></Properties></Item>
+]]></ProtectedString></Properties><Item class="BoolValue" referent="RBX0002MK"><Properties><string name="Name">KingBradleyV3</string><bool name="Value">true</bool></Properties></Item></Item>
 <Item class="ModuleScript" referent="RBX000003"><Properties><string name="Name">Motion</string><ProtectedString name="Source"><![CDATA[--[[
 	King Bradley boss - scripted root motion (ModuleScript "Motion", shared by BossServer and BossClient).
 
@@ -346,7 +346,7 @@ function Motion.yawOf(dir: Vector3): number?
 end
 
 return Motion
-]]></ProtectedString></Properties></Item>
+]]></ProtectedString></Properties><Item class="BoolValue" referent="RBX0003MK"><Properties><string name="Name">KingBradleyV3</string><bool name="Value">true</bool></Properties></Item></Item>
 <Item class="ModuleScript" referent="RBX000004"><Properties><string name="Name">Poses</string><ProtectedString name="Source"><![CDATA[--[[
 	King Bradley boss - key poses (ModuleScript "Poses", used by the Animator).
 
@@ -842,7 +842,7 @@ return {
 		fL = { 0.32, -0.05, -4.25, 70 },
 	},
 }
-]]></ProtectedString></Properties></Item>
+]]></ProtectedString></Properties><Item class="BoolValue" referent="RBX0004MK"><Properties><string name="Name">KingBradleyV3</string><bool name="Value">true</bool></Properties></Item></Item>
 <Item class="ModuleScript" referent="RBX000005"><Properties><string name="Name">Animator</string><ProtectedString name="Source"><![CDATA[--!nonstrict
 --[[
 	King Bradley boss - Animator (ModuleScript "Animator", used by BossClient).
@@ -2168,7 +2168,7 @@ ACT.Death = {
 ACT.Idle = nil
 
 return Animator
-]]></ProtectedString></Properties></Item>
+]]></ProtectedString></Properties><Item class="BoolValue" referent="RBX0005MK"><Properties><string name="Name">KingBradleyV3</string><bool name="Value">true</bool></Properties></Item></Item>
 <Item class="Script" referent="RBX000006"><Properties><string name="Name">BossServer</string><token name="RunContext">1</token><bool name="Disabled">false</bool><ProtectedString name="Source"><![CDATA[--[[
 	King Bradley boss - server brain.
 
@@ -2198,6 +2198,12 @@ local PathfindingService = game:GetService("PathfindingService")
 -- 0. Find the boss and move in
 -- ---------------------------------------------------------------------------------------------
 local SCRIPT_NAMES = { "Config", "Motion", "Poses", "Animator", "BossClient" }
+local ALL_NAMES = { "Config", "Motion", "Poses", "Animator", "BossClient", "BossServer" }
+local MARKER = "KingBradleyV3" -- every script of this version carries a BoolValue child with this name
+
+local function current(inst: Instance): boolean
+	return inst:FindFirstChild(MARKER) ~= nil
+end
 
 local function meshCount(inst: Instance): number
 	local n = 0
@@ -2233,7 +2239,7 @@ end
 
 local function takenByAnother(m: Model): boolean
 	for _, c in m:GetChildren() do
-		if c ~= script and c.Name == script.Name and c:IsA("BaseScript") then
+		if c ~= script and c.Name == "BossServer" and c:IsA("BaseScript") and current(c) then
 			return true
 		end
 	end
@@ -2262,6 +2268,16 @@ local function findBoss(): Model?
 end
 
 local function explainMissing()
+	for _, d in workspace:GetDescendants() do
+		if d.Name == "B_Hips" and d:IsA("Bone") then
+			local m = bossAround(d)
+			if m and takenByAnother(m) then
+				warn("[Bradley] " .. m:GetFullName() .. " is already run by another copy of the King Bradley scripts; "
+					.. "this copy (" .. script:GetFullName() .. ") does nothing. Delete one of the two KingBradleyScripts.")
+				return
+			end
+		end
+	end
 	-- meshes named like ours but no skeleton: the import dropped the rig
 	for _, d in workspace:GetDescendants() do
 		if d:IsA("MeshPart") and (d.Name == "Body_Skin" or d.Name == "Shirt_Shirt") then
@@ -2286,6 +2302,29 @@ if not model then
 	until model
 end
 
+-- scripts from an older version left inside him are removed, with what they had built
+do
+	local removed = {}
+	for _, c in model:GetChildren() do
+		if c ~= script and table.find(ALL_NAMES, c.Name) and (c:IsA("LuaSourceContainer")) and not current(c) then
+			table.insert(removed, c.Name)
+			c:Destroy()
+		end
+	end
+	if #removed > 0 then
+		warn("[Bradley] removed old King Bradley scripts from inside " .. model:GetFullName() .. ": " .. table.concat(removed, ", "))
+		local oldRoot = model:FindFirstChild("HumanoidRootPart")
+		if oldRoot and not oldRoot:GetAttribute("BradleyRoot") then
+			oldRoot:Destroy()
+		end
+		for _, d in model:GetDescendants() do
+			if (d.Name == "BossWeld" and d:IsA("WeldConstraint")) or (d.Name == "Hitbox" and d:IsA("BasePart")) then
+				d:Destroy()
+			end
+		end
+	end
+end
+
 -- move in: the scripts live inside the boss (BossClient must be in his model to run for players,
 -- and respawns clone the model with everything in it)
 do
@@ -2295,6 +2334,9 @@ do
 			local here = home and home:FindFirstChild(name)
 			if here and (here:IsA("ModuleScript") or here:IsA("BaseScript")) and not model:FindFirstChild(name) then
 				here.Parent = model
+			elseif not model:FindFirstChild(name) then
+				warn("[Bradley] SETUP PROBLEM: the " .. name .. " script is missing next to " .. script:GetFullName()
+					.. ". Insert KingBradleyScripts.rbxmx again (all six scripts must stay together).")
 			end
 		end
 		script.Parent = model
@@ -2304,6 +2346,10 @@ do
 	end
 end
 model:SetAttribute("BradleyBoss", true) -- BossClient waits for this before it starts
+-- a boss must always be on every player's machine: never streamed out (StreamingEnabled places)
+pcall(function()
+	model.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+end)
 
 -- A copy kept in ReplicatedStorage (or similar) idles here until it is put in the Workspace.
 while not model:IsDescendantOf(workspace) do
@@ -2442,6 +2488,11 @@ if canRespawn then
 		if brain and brain:IsA("BaseScript") then
 			brain.Enabled = false
 		end
+		for _, d in template:GetDescendants() do
+			if d:IsA("BasePart") then
+				d.Anchored = true -- a respawned copy holds still until its own BossServer stands it up
+			end
+		end
 		local folder = ServerStorage:FindFirstChild(TEMPLATE_FOLDER)
 		if not folder then
 			folder = Instance.new("Folder")
@@ -2477,7 +2528,16 @@ end
 
 local function heightRange(): (number, number)
 	local lo, hi = math.huge, -math.huge
+	local parts = {}
 	for _, p in visualParts() do
+		if p:IsA("MeshPart") then
+			table.insert(parts, p) -- only the meshes: the importer's bone holder "RootPart" is not body
+		end
+	end
+	if #parts == 0 then
+		parts = visualParts()
+	end
+	for _, p in parts do
 		local cf, h = p.CFrame, p.Size / 2
 		for _, sx in { -1, 1 } do
 			for _, sy in { -1, 1 } do
@@ -2514,66 +2574,152 @@ if type(Config.TargetHeight) == "number" and Config.TargetHeight > 0 then
 		end
 	end
 end
--- stand him on whatever is below him (the importer drops models in mid-air in front of the camera)
-do
+-- stand him on the floor below him (the importer drops models in mid-air in front of the camera).
+-- The ray starts far above him and passes through roofs: the highest floor at or below his feet
+-- wins; if he was imported under the floor, the lowest surface above his feet does.
+local function findFloor(): number?
 	local lo, hi = heightRange()
-	if lo < math.huge then
-		local box = model:GetBoundingBox()
-		local params = RaycastParams.new()
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		local ignore: { Instance } = { model }
-		for _, plr in Players:GetPlayers() do
-			if plr.Character then
-				table.insert(ignore, plr.Character)
-			end
-		end
-		params.FilterDescendantsInstances = ignore
-		local floorY: number? = nil
-		local reach = math.max(hi - lo, 1) * 0.25
-		for _, off in { Vector3.zero, Vector3.new(reach, 0, 0), Vector3.new(-reach, 0, 0), Vector3.new(0, 0, reach), Vector3.new(0, 0, -reach) } do
-			local from = Vector3.new(box.X + off.X, hi + 0.5, box.Z + off.Z)
-			local hit = workspace:Raycast(from, Vector3.new(0, -5000, 0), params)
-			if hit then
-				floorY = math.max(floorY or -math.huge, hit.Position.Y)
-			end
-		end
-		if floorY then
-			model:PivotTo(model:GetPivot() + Vector3.new(0, floorY - lo + 0.05, 0))
-		else
-			warn("[Bradley] there is no ground under King Bradley: place him above a floor or the Baseplate")
+	if lo == math.huge then
+		return nil
+	end
+	local height = math.max(hi - lo, 1)
+	local box = model:GetBoundingBox()
+	local ignore: { Instance } = { model }
+	for _, plr in Players:GetPlayers() do
+		if plr.Character then
+			table.insert(ignore, plr.Character)
 		end
 	end
+	for _, d in workspace:GetDescendants() do
+		if d ~= model and d:IsA("Model") and d:GetAttribute("BradleyBoss") then
+			table.insert(ignore, d) -- other bosses are not floors
+		end
+	end
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = ignore
+	params.IgnoreWater = true
+	params.RespectCanCollide = true
+	local below: number? = nil
+	local above: number? = nil
+	local reach = height * 0.2
+	for _, off in { Vector3.zero, Vector3.new(reach, 0, 0), Vector3.new(-reach, 0, 0), Vector3.new(0, 0, reach), Vector3.new(0, 0, -reach) } do
+		local from = Vector3.new(box.X + off.X, hi + height * 20 + 50, box.Z + off.Z)
+		for _ = 1, 12 do
+			local hit = workspace:Raycast(from, Vector3.new(0, -20000, 0), params)
+			if not hit then
+				break
+			end
+			local y = hit.Position.Y
+			if y <= lo + height * 0.3 then
+				below = math.max(below or -math.huge, y)
+				break
+			end
+			above = math.min(above or math.huge, y)
+			from = hit.Position - Vector3.new(0, 0.02, 0) -- continue through the roof (a ray starting inside a part ignores it)
+		end
+	end
+	return below or above
+end
+
+local floorY = findFloor()
+if not floorY then
+	warn("[Bradley] SETUP PROBLEM: there is no floor under King Bradley (" .. model:GetFullName() .. "). Move him "
+		.. "above a floor, terrain or the Baseplate and press Play again. He stays frozen in place until then.")
+	return -- he stays anchored where he is, instead of falling forever
+end
+do
+	local lo = heightRange()
+	model:PivotTo(model:GetPivot() + Vector3.new(0, floorY - lo + 0.03, 0))
 end
 local groundY, topY = heightRange()
 local scale: number = math.max((topY - groundY) / 9, 0.05) -- one unit = one stud on a 9-stud Bradley
 
-local hipsBone, facingBone = bone("B_Hips"), bone("B_Facing")
+local hipsBone = bone("B_Hips")
 if not hipsBone then
-	warn("[Bradley] no B_Hips bone found: import KingBradley.fbx with its armature (see README)")
+	warn("[Bradley] SETUP PROBLEM: no B_Hips bone in " .. model:GetFullName() .. ": import KingBradley.fbx again with "
+		.. "its rig (Rig Type: Custom) - see README")
 end
-if not (hrp and hrp:IsA("BasePart")) then
-	local hipsPos = if hipsBone then hipsBone.WorldPosition else model:GetPivot().Position
-	local fwd = if facingBone and hipsBone then facingBone.WorldPosition - hipsBone.WorldPosition else model:GetPivot().LookVector
+
+-- his forward: from the heels to the toes (bones that every import keeps), else the facing marker
+local function facingDir(): Vector3
+	local fl, fr, tl, tr = bone("B_FootL"), bone("B_FootR"), bone("B_ToeL"), bone("B_ToeR")
+	local fwd = Vector3.zero
+	if fl and fr and tl and tr then
+		fwd = (tl.WorldPosition + tr.WorldPosition) / 2 - (fl.WorldPosition + fr.WorldPosition) / 2
+	end
 	fwd = Vector3.new(fwd.X, 0, fwd.Z)
+	if fwd.Magnitude < 1e-3 then
+		local marker = bone("B_Facing")
+		if marker and hipsBone then
+			fwd = marker.WorldPosition - hipsBone.WorldPosition
+			fwd = Vector3.new(fwd.X, 0, fwd.Z)
+		end
+	end
 	if fwd.Magnitude < 1e-3 then
 		fwd = Vector3.new(0, 0, -1)
 	end
+	return fwd.Unit
+end
+local forward = facingDir()
+
+-- Bones that move no mesh are dropped by the importer unless "Keep Zero Influence Bones" is ticked:
+-- the facing marker and the blade tips. Rebuild them at their rest place (rig.json, metres, +Z forward).
+do
+	local REST = {
+		B_Facing = { "B_Hips", Vector3.new(0, 0.975, 0), Vector3.new(0, 0.975, 0.35) },
+		B_SaberTipR = { "B_SaberR", Vector3.new(-0.427, 0.822, 0.031), Vector3.new(-0.9017, 0.3045, 0.6019) },
+		B_SaberTipL = { "B_SaberL", Vector3.new(0.427, 0.822, 0.031), Vector3.new(0.9017, 0.3045, 0.6019) },
+	}
+	local head, toe = bone("B_Head"), bone("B_ToeR")
+	local studsPerMetre = if head and toe then (head.WorldPosition.Y - toe.WorldPosition.Y) / (1.585 - 0.03) else scale * 9 / 1.836
+	local frame = CFrame.lookAt(Vector3.zero, forward)
+	for name, r in REST do
+		local parent = bone(r[1])
+		if parent and not bone(name) then
+			local d = r[3] - r[2]
+			-- rig axes: +X is his left, +Z his front; root axes: +X his right, -Z his front
+			local offset = frame:VectorToWorldSpace(Vector3.new(-d.X, d.Y, -d.Z) * studsPerMetre)
+			local b = Instance.new("Bone")
+			b.Name = name
+			b.CFrame = CFrame.new(parent.WorldCFrame:PointToObjectSpace(parent.WorldPosition + offset))
+			b.Parent = parent
+		end
+	end
+end
+
+-- the root part is always built here, upright at the hips, facing his forward
+do
+	local imported = model:FindFirstChild("HumanoidRootPart")
+	if imported and imported:IsA("BasePart") and not imported:GetAttribute("BradleyRoot") then
+		imported.Name = "ImportedRootPart" -- an importer-made root is welded along like any other part
+	end
+	local hipsPos = if hipsBone then hipsBone.WorldPosition else model:GetBoundingBox().Position
 	local root = Instance.new("Part")
 	root.Name = "HumanoidRootPart"
 	root.Size = Vector3.new(2.2, 2, 1.2) * scale
-	root.CFrame = CFrame.lookAt(hipsPos, hipsPos + fwd.Unit)
+	root.CFrame = CFrame.lookAt(hipsPos, hipsPos + forward)
 	root.Transparency = 1
 	root.CanCollide = true
 	root.Anchored = true
+	root:SetAttribute("BradleyRoot", true)
 	root.Parent = model
 	hrp = root
 end
 model.PrimaryPart = hrp
 if not humanoid then
-	humanoid = Instance.new("Humanoid")
-	humanoid.Parent = model
+	-- set up before it enters the model: an R15 Humanoid without a neck would otherwise die at once
+	local h = Instance.new("Humanoid")
+	h.RigType = Enum.HumanoidRigType.R15
+	h.RequiresNeck = false
+	h.BreakJointsOnDeath = false
+	h.AutomaticScalingEnabled = false
+	h.Parent = model
+	humanoid = h
 end
-local hipHeight = math.max(hrp.Position.Y - hrp.Size.Y / 2 - groundY, 0.5)
+-- HipHeight: from the floor to the bottom of the root part (sane range: 30-60% of his height)
+local height = topY - groundY
+local hipHeight = math.clamp(hrp.Position.Y - hrp.Size.Y / 2 - groundY, height * 0.3, height * 0.6)
 model:SetAttribute("RigScale", scale)
 
 local homeCF = model:GetPivot()
@@ -2768,8 +2914,19 @@ do
 			table.insert(missing, n)
 		end
 	end
-	print(("[Bradley] ready: %s, %d meshes, %d bones, %.1f studs tall%s"):format(model:GetFullName(), meshCount(model), bones,
-		topY - groundY, if #missing > 0 then " (missing bones: " .. table.concat(missing, ", ") .. ")" else ""))
+	local skinned = 0
+	for _, d in model:GetDescendants() do
+		if d:IsA("MeshPart") and d.HasSkinnedMesh then
+			skinned += 1
+		end
+	end
+	print(("[Bradley] ready: %s, %d meshes (%d skinned), %d bones, %.1f studs tall, hip height %.1f%s"):format(model:GetFullName(),
+		meshCount(model), skinned, bones, topY - groundY, hipHeight,
+		if #missing > 0 then " (missing bones: " .. table.concat(missing, ", ") .. ")" else ""))
+	if skinned == 0 and meshCount(model) > 0 then
+		warn("[Bradley] SETUP PROBLEM: none of his meshes are skinned, so the bones cannot move them. Import "
+			.. "KingBradley.fbx again with the rig kept (Rig Type: Custom) and Merge Meshes off.")
+	end
 end
 log(string.format("rig ready: %d welds, scale %.2f, hip height %.2f", weldCount, scale, hipHeight))
 
@@ -4220,7 +4377,7 @@ task.spawn(function()
 		end
 	end
 end)
-]]></ProtectedString></Properties></Item>
+]]></ProtectedString></Properties><Item class="BoolValue" referent="RBX0006MK"><Properties><string name="Name">KingBradleyV3</string><bool name="Value">true</bool></Properties></Item></Item>
 <Item class="Script" referent="RBX000007"><Properties><string name="Name">BossClient</string><token name="RunContext">2</token><bool name="Disabled">false</bool><ProtectedString name="Source"><![CDATA[--!nonstrict
 --[[
 	King Bradley boss - client: animation (through the Animator module), visual effects, the local
@@ -4256,9 +4413,14 @@ local function claimedModel(): Model?
 	return if p and p:IsA("Model") and p:GetAttribute("BradleyBoss") == true then p else nil
 end
 local model = claimedModel()
+local waited = 0
 while not model do
 	-- still in the KingBradleyScripts folder: BossServer is about to move this script into the boss
 	task.wait(0.25)
+	waited += 0.25
+	if waited == 15 then
+		warn("[Bradley] BossClient is still waiting for BossServer to set King Bradley up: read the server's [Bradley] lines in Output")
+	end
 	model = claimedModel()
 end
 while not model:IsDescendantOf(workspace) do
@@ -4312,16 +4474,21 @@ local I = CFrame.identity
 -- =============================================================================================
 -- 2. Rig
 -- =============================================================================================
+local readyWait = 0
 while not model:GetAttribute("RigReady") do
 	if not model:IsDescendantOf(workspace) then
 		return
 	end
 	task.wait(0.2)
+	readyWait += 1
+	if readyWait == 75 then
+		warn("[Bradley] King Bradley is not set up yet (no RigReady after 15 s): read the server's [Bradley] lines in Output")
+	end
 end
-local hrp = model:WaitForChild("HumanoidRootPart", 10)
-if not (hrp and hrp:IsA("BasePart")) then
-	warn("[Bradley] BossClient: the model has no HumanoidRootPart")
-	return
+local hrp = model:FindFirstChild("HumanoidRootPart")
+while not (hrp and hrp:IsA("BasePart") and hrp:GetAttribute("BradleyRoot")) do
+	model.ChildAdded:Wait()
+	hrp = model:FindFirstChild("HumanoidRootPart")
 end
 local humanoid = model:FindFirstChildOfClass("Humanoid")
 local S = model:GetAttribute("RigScale")
@@ -6466,5 +6633,5 @@ do
 	end
 end
 log("ready")
-]]></ProtectedString></Properties></Item>
+]]></ProtectedString></Properties><Item class="BoolValue" referent="RBX0007MK"><Properties><string name="Name">KingBradleyV3</string><bool name="Value">true</bool></Properties></Item></Item>
 </Item></roblox>
