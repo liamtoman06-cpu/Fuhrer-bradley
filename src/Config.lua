@@ -1,0 +1,201 @@
+--[[
+	King Bradley boss - shared settings (ModuleScript "Config", required by BossServer and BossClient).
+	Every time below is in seconds from the start of the action (at normal speed).
+
+	Fight flow
+	  Phase 1  sabers drawn on first sight. Lunge, Cross Cut, Saber Throw, Tank Cleaver.
+	           At CapeHealth he tears off his cape ("Remove Cape").
+	  Phase 2  at EyeHealth he tears off the eyepatch and opens the Ultimate Eye ("Remove Eyepatch").
+	           Basic attacks run EyeSpeedBoost times faster and two eye abilities unlock:
+	           Thousand Cuts (a 3x speed flurry that ends in a cross-shaped slash wave) and
+	           Phantom Step (reads the target's movement, cuts a pentagram of slashes around them,
+	           then every cut detonates at once).
+]]
+
+local Config = {
+	DisplayName = "KING BRADLEY",
+	Subtitle = "Wrath  ·  Führer of Amestris",
+	EyeSubtitle = "Wrath  ·  The Ultimate Eye",
+
+	MaxHealth = 9000,
+	WalkSpeed = 12, -- walking pace (close range, returning home)
+	RunSpeed = 26, -- sprint toward targets farther than RunDistance
+	EyeRunSpeed = 32, -- sprint speed once the Ultimate Eye is open
+	RunDistance = 26,
+
+	CapeHealth = 0.8, -- health fraction where he throws off his cape
+	EyeHealth = 0.5, -- health fraction where he removes the eyepatch (phase 2)
+	EyeSpeedBoost = 1.4, -- basic attacks play this much faster in phase 2
+	EyeCooldownScale = 0.65, -- basic attack cooldowns are multiplied by this in phase 2
+
+	AggroRange = 140, -- he hunts players closer than this
+	LeashRange = 240, -- he gives up and walks home past this
+	BossBarRange = 170, -- players this close see the boss health bar
+
+	RespawnTime = 30, -- seconds after death before he comes back (nil = never)
+
+	-- Sound ids. The defaults are sounds that ship with Roblox; replace or clear ("") as you like.
+	Sounds = {
+		Unsheathe = "rbxasset://sounds/unsheath.wav",
+		Slash = "rbxasset://sounds/swordslash.wav",
+		Lunge = "rbxasset://sounds/swordlunge.wav",
+		Throw = "rbxasset://sounds/swordlunge.wav",
+		Impact = "",
+		CapeTear = "",
+		PatchTear = "",
+		EyeOpen = "",
+		Detonate = "",
+		Wave = "",
+		Death = "",
+		Voice = "", -- a line played when the Ultimate Eye opens (optional)
+	},
+
+	Cooldowns = {
+		Lunge = 6,
+		CrossCut = 3.2,
+		SaberThrow = 7,
+		Cleave = 9,
+		ThousandCuts = 13,
+		PhantomStep = 19,
+	},
+
+	Actions = {
+		Draw = {
+			-- first sight: right hand to the left hip, left hand to the right hip, draw, flourish
+			Duration = 2.1,
+			Reach = { 0.0, 0.45 },
+			DrawAt = 0.5, -- blades leave the scabbards
+			Flourish = { 0.55, 1.45 },
+			Settle = { 1.45, 2.1 },
+		},
+		Sheathe = {
+			-- after a reset: both blades go home
+			Duration = 1.8,
+			Reach = { 0.0, 0.7 },
+			SheatheAt = 0.85,
+			Settle = { 0.95, 1.8 },
+		},
+		RemoveCape = {
+			-- grabs the cape at the left shoulder, rips it off and flings it aside
+			Duration = 2.4,
+			Grab = { 0.0, 0.55 },
+			Rip = { 0.55, 0.9 },
+			ReleaseAt = 0.9,
+			Fling = { 0.9, 1.4 },
+			Settle = { 1.4, 2.4 },
+		},
+		RemoveEyepatch = {
+			-- left hand to the patch, tears it off, flicks it away; the Ultimate Eye opens
+			Duration = 4.0,
+			Raise = { 0.0, 0.7 },
+			Grip = { 0.7, 0.95 },
+			TearAt = 1.05,
+			Toss = { 1.05, 1.5 },
+			Open = { 1.8, 2.3 },
+			OpenAt = 2.15,
+			Aura = { 2.15, 3.4 },
+			Settle = { 3.4, 4.0 },
+			ShockRadius = 26,
+			ShockDamage = 10,
+			Knockback = 65,
+		},
+
+		-- ---------------------------------------------------------------- basic attacks
+		Lunge = {
+			-- crouches with the right blade drawn back, then crosses the distance in a blink
+			Duration = 1.75,
+			WindUp = { 0.0, 0.6 },
+			Dash = { 0.6, 0.82 },
+			Recover = { 0.82, 1.75 },
+			Range = 32, -- maximum dash distance
+			MinRange = 9, -- he prefers it when the target is farther than this
+			Overshoot = 6, -- he ends this far past the target
+			HitRadius = 4.5,
+			Damage = 28,
+		},
+		CrossCut = {
+			-- right diagonal, left diagonal, then both blades together in an X
+			Duration = 1.9,
+			Hits = { 0.32, 0.68, 1.12 },
+			Step = 1.6, -- studs he advances with every cut
+			Range = 11,
+			Arc = 80, -- half-angle in front of him
+			Damage = 13,
+			FinalDamage = 20,
+		},
+		SaberThrow = {
+			-- hurls the left saber like a javelin, then draws a spare from his back
+			Duration = 1.9,
+			WindUp = { 0.0, 0.5 },
+			ReleaseAt = 0.52,
+			Redraw = { 0.85, 1.45 },
+			Speed = 150,
+			Range = 90,
+			HitRadius = 3,
+			Damage = 24,
+			SplashRadius = 6,
+			SplashDamage = 10,
+			MinRange = 16,
+		},
+		Cleave = {
+			-- "the tank cleaver": leaps high and splits the ground with both blades
+			Duration = 2.45,
+			Crouch = { 0.0, 0.4 },
+			Leap = { 0.4, 1.05 },
+			ImpactAt = 1.05,
+			Recover = { 1.2, 2.45 },
+			LeapHeight = 14,
+			MaxLeap = 34,
+			Radius = 10,
+			Damage = 34,
+			FissureLength = 30,
+			FissureWidth = 6,
+			FissureDamage = 22,
+			Knockback = 75,
+		},
+
+		-- ---------------------------------------------------------------- Ultimate Eye abilities
+		ThousandCuts = {
+			-- the eye locks on, time seems to stop, then he cuts three times faster than the eye
+			-- can follow; it ends in a cross-shaped wave of force that tears down the arena
+			Duration = 3.8,
+			Focus = { 0.0, 0.75 },
+			Flurry = { 0.75, 2.3 },
+			Slashes = 12,
+			Advance = 9,
+			Range = 12,
+			Arc = 95,
+			TickDamage = 8,
+			Final = { 2.3, 2.95 },
+			FinalAt = 2.62,
+			WaveSpeed = 130,
+			WaveLength = 80,
+			WaveWidth = 9,
+			WaveDamage = 42,
+			Recover = { 2.95, 3.8 },
+		},
+		PhantomStep = {
+			-- reads where the target is going, then dashes a pentagram of cuts through that spot.
+			-- The cuts hang in the air for a moment and then all detonate: get out of the lines!
+			Duration = 4.8,
+			Lock = { 0.0, 1.1 },
+			Steps = { 1.1, 2.35 },
+			Points = 5,
+			Radius = 13,
+			Lead = 0.45, -- seconds of the target's movement he predicts
+			Pause = { 2.35, 3.2 }, -- sheathe-like pose with his back turned; the lines glow
+			DetonateAt = 3.2,
+			LineRadius = 3.6,
+			LineDamage = 22, -- per line a player stands in (at most 3 lines count)
+			CoreRadius = 7,
+			CoreDamage = 30,
+			Recover = { 3.35, 4.8 },
+		},
+
+		Death = {
+			Duration = 6.5,
+		},
+	},
+}
+
+return Config
