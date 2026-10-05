@@ -39,7 +39,15 @@ new GLTFLoader().parse(bin.buffer, '', g => {
     }
     root.updateMatrixWorld(true);
   };
-  window.shot = (p, t, fov) => { const cam = new THREE.PerspectiveCamera(fov, ${W}/${H}, 0.01, 60); cam.position.set(...p); cam.lookAt(...t); r.render(scene, cam); return r.domElement.toDataURL('image/png'); };
+  window.shot = (p, t, fov, roll) => { const cam = new THREE.PerspectiveCamera(fov, ${W}/${H}, 0.01, 60); cam.position.set(...p); cam.lookAt(...t); if (roll) cam.rotateZ(roll); r.render(scene, cam); return r.domElement.toDataURL('image/png'); };
+  window.bonePos = (n) => { const v = new THREE.Vector3(); if (bones[n]) bones[n].getWorldPosition(v); return [v.x, v.y, v.z]; };
+  // a stand-in player (R15-sized: root 3 studs up, 5.2 studs tall) for the cutscene previews
+  const dummy = new THREE.Group(); const mat = new THREE.MeshStandardMaterial({ color: 0x9aa3ad });
+  window.makeDummy = (U) => {
+    const add = (w, h, d, y) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w * U, h * U, d * U), mat); m.position.y = y * U; dummy.add(m); };
+    add(1.7, 2.0, 0.8, -2.0); add(2.0, 1.9, 1.0, -0.05); const head = new THREE.Mesh(new THREE.SphereGeometry(0.62 * U, 16, 12), mat); head.position.y = 1.55 * U; dummy.add(head);
+    dummy.visible = false; scene.add(dummy); };
+  window.placeDummy = (p) => { if (!p) { dummy.visible = false; return; } dummy.visible = true; dummy.position.set(...p); };
   window.hide = (prefixes) => { root.traverse(o => { if (o.isMesh) o.visible = !prefixes.some(p => o.name.startsWith(p) || (o.parent && o.parent.name.startsWith(p))); }); };
   window.ready = true;
 }, e => { document.title = 'ERR ' + e; });
@@ -52,6 +60,7 @@ fs.writeFileSync(outPrefix + '_page.html', html);
 await page.goto('file://' + path.resolve(outPrefix + '_page.html'));
 await page.waitForFunction('window.ready === true || document.title.startsWith("ERR")', null, { timeout: 120000 });
 if (process.env.HIDE) await page.evaluate(h => window.hide(h.split(',')), process.env.HIDE);
+await page.evaluate(u => window.makeDummy(u), Number(process.env.CINE_U || 0.204));
 const VIEWS = { front: [[0, 0.1, -3.6], [0, -0.05, 0], 32], three: [[-2.2, 0.45, -2.9], [0, -0.05, 0], 32], side: [[3.6, 0.1, 0], [0, -0.05, 0], 32],
   back: [[0.4, 0.4, 3.6], [0, -0.05, 0], 32], left: [[-3.6, 0.1, 0], [0, -0.05, 0], 32], face: [[0, 0.7, -1.2], [0, 0.7, 0], 26], high: [[-2.5, 1.6, -2.5], [0, -0.1, 0], 34] };
 for (const job of jobs) {
@@ -61,6 +70,38 @@ for (const job of jobs) {
   const urls = [];
   for (const i of idx) {
     const fr = clip.frames[Math.min(i, clip.frames.length - 1)];
+    if (view === 'cine') {
+      urls.push(await page.evaluate(([fr, cine, Uval]) => {
+        window.apply(fr);
+        const V = (a) => ({ x: a[0], y: a[1], z: a[2] }), add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+        const len = (a) => Math.hypot(a[0], a[1], a[2]), unit = (a) => mul(a, 1 / (len(a) || 1)), lerp = (a, b, k) => add(a, mul(sub(b, a), k));
+        const clamp01 = (x) => Math.max(0, Math.min(1, x)), prog = (a, b, x) => clamp01((x - a) / (b - a)), smooth = (x) => x * x * (3 - 2 * x), smoother = (x) => x * x * x * (x * (6 * x - 15) + 10);
+        const U = Uval, t = fr.t, c = cine.cfg;
+        // the victim: a player standing cine.victim studs ahead of where he started; launched at the kick
+        let v = [0, -cine.hipsY + 3.0 * U, -cine.victim * U];
+        const kd = [0, 0, -1], side = [-kd[2], 0, kd[0]];
+        if (cine.kind === 'execution' && t >= c.KickAt) { const tau = t - c.KickAt; v = add(v, add(mul(kd, 125 * U * tau), [0, (55 * tau - 0.5 * 196.2 * tau * tau) * U, 0])); }
+        window.placeDummy(cine.kind === 'execution' || cine.showTarget ? v : null);
+        let P, T, fov, roll = 0;
+        if (cine.kind === 'gaze') {
+          const eye = window.bonePos('B_Patch'); const tgt = add(v, [0, 0.8 * U, 0]);
+          const look = unit(sub(tgt, eye)); const sd = unit([-look[2], 0, look[0]]);
+          const push = smoother(prog(c.Gaze[0], c.Gaze[0] + 0.32, t)), hold = prog(c.Gaze[0] + 0.32, c.Gaze[1], t);
+          const close = add(add(add(eye, mul(look, (1.7 - 0.6 * hold) * U)), mul(sd, 0.12 * U)), [0, 0.05 * U, 0]);
+          const from = add(tgt, [0, 3 * U, 9 * U]);
+          P = lerp(from, close, push); T = lerp(cine.bossChest || [0, 0, 0], eye, push); fov = 70 + (20 - 70) * push + 10 * hold * push; roll = (7 - 13 * hold) * Math.PI / 180 * push;
+        } else {
+          const vChest = add(v, [0, 0.8 * U, 0]), boss = window.bonePos('B_Chest');
+          if (t < c.DashStart) { const k = prog(0, c.DashStart, t); P = add(add(add(vChest, mul(side, (6.2 - 1.0 * k) * U)), mul(kd, -1.0 * U)), [0, 0.35 * U, 0]); T = add(vChest, mul(kd, -0.5 * U)); fov = 40 - 4 * k; roll = 6; }
+          else if (t < c.DashEnd + 0.04) { const k = prog(c.DashStart, c.DashEnd + 0.04, t); P = add(add(add(v, mul(kd, (3.0 - 0.6 * k) * U)), mul(side, 2.6 * U)), [0, -1.2 * U, 0]); T = boss; fov = 60 - 20 * k; roll = -6; }
+          else if (t < c.KickAt) { const k = prog(c.DashEnd + 0.04, c.KickAt, t); const mid = mul(add(boss, vChest), 0.5); P = add(add(mid, mul(side, (14 - 1.5 * k) * U)), [0, -1.0 * U, 0]); T = add(mid, [0, 0.5 * U, 0]); fov = 50; roll = -8; }
+          else if (t < c.KickAt + 0.16) { P = add(add(add(boss, mul(side, 10 * U)), mul(kd, -6 * U)), [0, 2.5 * U, 0]); T = lerp(boss, v, 0.5); fov = 60; roll = 0; } else { P = add(add(add(v, mul(side, 9 * U)), mul(kd, -3 * U)), [0, 2 * U, 0]); T = add(v, mul(kd, 2 * U)); fov = 60; roll = 0; }
+          roll = roll * Math.PI / 180;
+        }
+        return window.shot(P, T, fov, roll);
+      }, [fr, JSON.parse(process.env.CINE || '{}'), Number(process.env.CINE_U || 0.204)]));
+      continue;
+    }
     const [p, t, f] = VIEWS[view];
     const follow = [fr.root[0], fr.root[1], fr.root[2]];
     const P = [p[0] + follow[0], p[1] + follow[1], p[2] + follow[2]], Tg = [t[0] + follow[0], t[1] + follow[1], t[2] + follow[2]];

@@ -7,6 +7,8 @@
 	           Tank Cleaver.
 	           At CapeHealth he tears off his cape ("Remove Cape").
 	  Phase 2  at EyeHealth he tears off the eyepatch and opens the Ultimate Eye ("Remove Eyepatch").
+	           Straight after, once per fight, Piercing Gaze: a close-up on the eye, then a saber
+	           hurled at one player's chest (dodgeable). A hit starts the Execution cutscene.
 	           Basic attacks run EyeSpeedBoost times faster and two eye abilities unlock:
 	           Thousand Cuts (a 3x speed flurry that ends in a cross-shaped slash wave) and
 	           Phantom Step (reads the target's movement, cuts a pentagram of slashes around them,
@@ -110,7 +112,7 @@ local Config = {
 			Duration = 1.9,
 			Hits = { 0.32, 0.68, 1.12 },
 			Step = 1.6, -- studs he advances with every cut
-			Range = 11,
+			Range = 10, -- reach of each cut (the drawn slashes match it; a player's width is added)
 			Arc = 80, -- half-angle in front of him
 			Damage = 13,
 			FinalDamage = 20,
@@ -155,8 +157,8 @@ local Config = {
 			Flurry = { 0.75, 2.3 },
 			Slashes = 12,
 			Advance = 9,
-			Range = 12,
-			Arc = 95,
+			Range = 10,
+			Arc = 85,
 			TickDamage = 8,
 			Final = { 2.3, 2.95 },
 			FinalAt = 2.62,
@@ -182,6 +184,34 @@ local Config = {
 			CoreRadius = 7,
 			CoreDamage = 30,
 			Recover = { 3.35, 4.8 },
+		},
+
+		PiercingGaze = {
+			-- once per fight, right after the Ultimate Eye opens: the camera closes in on his eye, a red
+			-- sight line follows the target, locks (turns white) and he hurls a saber at their chest.
+			-- Step off the line to dodge it. If it hits, the Execution cutscene plays.
+			Duration = 3.7, -- when the throw misses
+			Gaze = { 0.1, 1.35 }, -- the close-up on his eye (players within GazeRange see it)
+			GazeRange = 140,
+			LockAt = 1.85, -- the aim stops following the target here
+			ReleaseAt = 2.1,
+			Speed = 240,
+			Range = 110,
+			HitRadius = 2.2,
+			Damage = 15,
+			Redraw = { 2.75, 3.25 }, -- after a miss he draws a spare saber
+		},
+		Execution = {
+			-- the pinned victim: he blitzes in, grips the hilt and kicks them off the blade
+			Duration = 2.7,
+			DashStart = 0.6,
+			DashEnd = 0.98,
+			StandOff = 3.6, -- he stops this far from the victim
+			GrabAt = 1.04,
+			KickAt = 1.32,
+			KickDamage = 35,
+			Knockback = 125, -- the victim's launch speed (studs/s)
+			KnockUp = 55,
 		},
 
 		Death = {

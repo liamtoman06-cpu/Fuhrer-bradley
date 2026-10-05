@@ -877,13 +877,38 @@ local function livingVictims(): { Victim }
 	return list
 end
 
+-- Hits are judged where each player is on their OWN screen: the server hears about a player's
+-- movement about half a ping late, so their root is led by that much of their velocity. A player
+-- who dodged in time on their screen is not hit by a stale position.
+local function lead(v: Victim): number
+	local ok, ping = pcall(function()
+		return v.player:GetNetworkPing()
+	end)
+	if not ok or type(ping) ~= "number" then
+		return 0.05
+	end
+	return math.clamp(ping * 0.5 + 0.02, 0, 0.16)
+end
+
+local function seenRoot(v: Victim): Vector3
+	local vel = v.root.AssemblyLinearVelocity
+	vel = Vector3.new(vel.X, math.clamp(vel.Y, -60, 60), vel.Z)
+	if vel.Magnitude > 70 then
+		vel = vel.Unit * 70
+	end
+	return v.root.Position + vel * lead(v)
+end
+
 -- A player's body as a vertical segment, feet to head (works for R6, R15 and scaled avatars).
-local function bodySegment(v: Victim): (Vector3, Vector3)
-	local p = v.root.Position
+-- raw = the replicated position (for aiming); otherwise the led position (for judging hits).
+local function bodySegment(v: Victim, raw: boolean?): (Vector3, Vector3)
+	local p = if raw then v.root.Position else seenRoot(v)
 	local half = v.root.Size.Y / 2
 	local legs = math.max(v.humanoid.HipHeight, 2)
 	return p - Vector3.new(0, half + legs, 0), p + Vector3.new(0, half + 1.6, 0)
 end
+
+local BODY_RADIUS = 1.1 -- a player's half-width (their arms and shoulders count, not just the spine)
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -928,6 +953,8 @@ local nextActionAt = 0
 local provokedUntil = 0
 local pendingCape = false
 local pendingEye = false
+local pendingImpale = false -- Piercing Gaze plays right after the eye opens...
+local impaleDone = false -- ...once per fight
 local cdUntil: { [string]: number } = {}
 for name in Cooldowns do
 	cdUntil[name] = 0
@@ -1430,7 +1457,7 @@ local function frontalHits(pos: Vector3, look: Vector3, range: number, arcDeg: n
 		local closest = closestOnSegment(pos, a, b)
 		local off = closest - pos
 		local d = flat(off).Magnitude
-		if d <= range and math.abs(off.Y) <= 7 * scale then
+		if d <= range + BODY_RADIUS and math.abs(off.Y) <= 7 * scale then
 			if d < 2.5 * scale or flat(off).Unit:Dot(look) >= cosA then
 				fn(v)
 			end
@@ -1485,12 +1512,16 @@ local function doRemoveEyepatch()
 	end
 	eyeOpen = true
 	pendingEye = false -- hits during the tear may have queued it again
+	if not impaleDone then
+		pendingImpale = true
+	end
 	model:SetAttribute("Enraged", true)
 	model:SetAttribute("Subtitle", Config.EyeSubtitle)
 	-- the eye opens with a pressure wave (knockback is applied by each client)
 	local radius = cfg.ShockRadius * scale
 	for _, v in livingVictims() do
-		if flatDist(v.root.Position, hrp.Position) <= radius and math.abs(v.root.Position.Y - hrp.Position.Y) < 10 * scale then
+		local p = seenRoot(v)
+		if flatDist(p, hrp.Position) <= radius + BODY_RADIUS and math.abs(p.Y - hrp.Position.Y) < 10 * scale then
 			hurt(v, cfg.ShockDamage)
 		end
 	end
@@ -1747,9 +1778,10 @@ local function doCleave()
 		local a, b = bodySegment(v)
 		local feetAbove = a.Y - impact.Y
 		if feetAbove <= 5 * scale and b.Y >= impact.Y - 4 * scale then
-			if flatDist(v.root.Position, impact) <= radius then
+			local p = seenRoot(v)
+			if flatDist(p, impact) <= radius + BODY_RADIUS then
 				hurt(v, cfg.Damage)
-			elseif pointSegmentDistance(Vector3.new(v.root.Position.X, impact.Y, v.root.Position.Z), impact, Vector3.new(fissureEnd.X, impact.Y, fissureEnd.Z)) <= half then
+			elseif pointSegmentDistance(Vector3.new(p.X, impact.Y, p.Z), impact, Vector3.new(fissureEnd.X, impact.Y, fissureEnd.Z)) <= half + BODY_RADIUS * 0.5 then
 				hurt(v, cfg.FissureDamage)
 			end
 		end
@@ -1824,7 +1856,8 @@ local function doThousandCuts()
 				local a, b = bodySegment(v)
 				local lo = Vector3.new(prev.X, a.Y, prev.Z)
 				local hi = Vector3.new(front.X, a.Y, front.Z)
-				if pointSegmentDistance(Vector3.new(v.root.Position.X, a.Y, v.root.Position.Z), lo, hi) <= half and math.abs(v.root.Position.Y - origin.Y) <= 9 * scale then
+				local p = seenRoot(v)
+				if pointSegmentDistance(Vector3.new(p.X, a.Y, p.Z), lo, hi) <= half + BODY_RADIUS * 0.5 and math.abs(p.Y - origin.Y) <= 9 * scale then
 					hitSet[v.player] = true
 					hurt(v, cfg.WaveDamage)
 				end
@@ -1914,7 +1947,8 @@ local function doPhantomStep()
 	for _, v in livingVictims() do
 		local feet = bodySegment(v)
 		if math.abs(feet.Y - (centerRoot.Y - rootHeight())) <= 8 * scale then
-			local p = Vector3.new(v.root.Position.X, 0, v.root.Position.Z)
+			local seen = seenRoot(v)
+			local p = Vector3.new(seen.X, 0, seen.Z)
 			local count = 0
 			for _, l in lines do
 				local a = Vector3.new(l[1].X, 0, l[1].Z)
@@ -1924,7 +1958,7 @@ local function doPhantomStep()
 				end
 			end
 			local dmg = math.min(count, 3) * cfg.LineDamage
-			if flatDist(v.root.Position, centerRoot) <= coreR then
+			if flatDist(seen, centerRoot) <= coreR then
 				dmg += cfg.CoreDamage
 			end
 			if dmg > 0 then
@@ -1932,6 +1966,127 @@ local function doPhantomStep()
 			end
 		end
 	end
+	if not waitUntil(start + cfg.Duration) then
+		return
+	end
+	endAction()
+end
+
+-- ---- Ultimate Eye: Piercing Gaze, then the Execution (once per fight) -------------------------------
+local function chestOf(v: Victim, raw: boolean?): Vector3
+	local feet, head = bodySegment(v, raw)
+	return feet:Lerp(head, 0.66)
+end
+
+-- The pinned victim: he blitzes in, grips the hilt and kicks them off the blade. The victim's own
+-- client freezes them until the kick and then launches them (players own their physics).
+local function runExecution(v: Victim)
+	local cfg = Actions.Execution
+	local start = beginAction("Execution", v.root.Position, 1, v.player)
+	refreshRayFilter()
+	local from = hrp.Position
+	local off = flat(v.root.Position - from)
+	local dir = if off.Magnitude > 0.5 then off.Unit else lookFlat()
+	local standDist = math.max(off.Magnitude - cfg.StandOff * scale, 0)
+	local goal = rootOnGround(clampTravel(from, from + dir * standDist, 1.5 * scale), from.Y)
+	local yaw = yawOf(dir) or (yawOf(hrp.CFrame.LookVector) or 0)
+	startMotion({ Motion.key(cfg.DashStart, from, yaw, "l"), Motion.key(cfg.DashEnd, goal, yaw, "o") }, start)
+	if not waitUntil(start + cfg.KickAt) then
+		return
+	end
+	local now = victimOf(v.player)
+	if now and flatDist(seenRoot(now), hrp.Position) <= (cfg.StandOff + 7) * scale then
+		hurt(now, cfg.KickDamage)
+	end
+	if not waitUntil(start + cfg.Duration) then
+		return
+	end
+	endAction()
+end
+
+local function doPiercingGaze()
+	local cfg = Actions.PiercingGaze
+	pendingImpale = false
+	impaleDone = true
+	local t = target
+	if not t then
+		return
+	end
+	local start = beginAction("PiercingGaze", chestOf(t, true), 1, t.player)
+	setFacing("target", TURN.lock)
+	-- the eye reads the target: the sight line follows them until the lock
+	while alive() and serverNow() < start + cfg.LockAt do
+		refreshTarget()
+		if target then
+			model:SetAttribute("ActionTarget", chestOf(target, true))
+		end
+		task.wait(0.05)
+	end
+	if not alive() then
+		return
+	end
+	refreshTarget()
+	t = target
+	refreshRayFilter()
+	-- locked: the throw flies straight down this line (no homing), so stepping off it dodges
+	local origin = hrp.CFrame:PointToWorldSpace(Vector3.new(-HAND_OFFSET.X, HAND_OFFSET.Y, HAND_OFFSET.Z) * scale)
+	local last = model:GetAttribute("ActionTarget")
+	local aim = if t then chestOf(t, true) elseif typeof(last) == "Vector3" then last else frontPoint()
+	local dir = aim - origin
+	if dir.Magnitude < 0.5 then
+		dir = lookFlat()
+	end
+	dir = dir.Unit
+	local range = cfg.Range * scale
+	local wall = workspace:Raycast(origin, dir * range, rayParams)
+	local impact = if wall then wall.Position else origin + dir * range
+	model:SetAttribute("ActionTarget", impact)
+	setFacing("point", TURN.windUp, impact)
+
+	local release = start + cfg.ReleaseAt
+	if not waitUntil(release) then
+		return
+	end
+	local speed = cfg.Speed * scale
+	local total = (impact - origin).Magnitude / speed
+	local radius = cfg.HitRadius * scale
+	local prev = origin
+	local struck: Victim? = nil
+	while alive() do
+		local u = math.min((serverNow() - release) / math.max(total, 1e-3), 1)
+		local tip = origin:Lerp(impact, u)
+		local best, bestD = nil, math.huge
+		for _, v in livingVictims() do
+			local a, b = bodySegment(v)
+			if segmentDistance(prev, tip, a, b) <= radius then
+				local d = (v.root.Position - prev).Magnitude -- the first body along the flight
+				if d < bestD then
+					best, bestD = v, d
+				end
+			end
+		end
+		if best then
+			struck = best
+			break
+		end
+		prev = tip
+		if u >= 1 then
+			break
+		end
+		task.wait()
+	end
+	if not alive() then
+		return
+	end
+	if struck then
+		hurt(struck, cfg.Damage)
+		local still = victimOf(struck.player)
+		if still then
+			runExecution(still)
+			return
+		end
+	end
+	-- missed: he draws a spare saber and fights on
 	if not waitUntil(start + cfg.Duration) then
 		return
 	end
@@ -1947,6 +2102,8 @@ local function resetBoss()
 	humanoid.Health = humanoid.MaxHealth
 	pendingCape = false
 	pendingEye = false
+	pendingImpale = false
+	impaleDone = false
 	challenged = false
 	if capeOff or eyeOpen then
 		capeOff = false
@@ -2147,6 +2304,10 @@ local function combatStep(v: Victim, clock: number)
 		end
 		if pendingEye then
 			doRemoveEyepatch()
+			return
+		end
+		if pendingImpale then
+			doPiercingGaze()
 			return
 		end
 		local attack = chooseAttack(v, dist)

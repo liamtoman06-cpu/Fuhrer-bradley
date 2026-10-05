@@ -923,7 +923,8 @@ function Animator:scabbardLayer(inp)
 			local hip, knee = leg.upper.rel.Position, leg.lower.rel.Position
 			local fwd = math.atan2(-(knee.Z - hip.Z), -(knee.Y - hip.Y))
 			local hipsPitch = self.acc.B_Hips.r.X
-			push = math.max(0, fwd + hipsPitch) * 0.95
+			-- capped: a high kick shoves it forward, it never swings up past the horizontal
+			push = math.min(math.max(0, fwd + hipsPitch) * 0.95, 0.9)
 		end
 		local run = self.gait.run * self.gait.walkW
 		push *= 1 - 0.85 * run
@@ -1308,6 +1309,72 @@ ACT.PhantomStep = {
 		if t < c.Steps[1] then
 			A.F.look, A.F.lookW = rec.rootTarget, w
 		end
+	end,
+}
+
+-- Piercing Gaze: the stare (camera close-up on the eye), a slow javelin wind-up while the sight line
+-- tracks the target, the throw; after a miss he draws a spare like the Saber Throw.
+ACT.PiercingGaze = {
+	setup = function(A, rec)
+		local lock, rl = cfgv(rec, "LockAt", 1.85), cfgv(rec, "ReleaseAt", 2.1)
+		local D = cfgv(rec, "Duration", 3.7)
+		local rd = cfgv(rec, "Redraw", { rl + 0.65, rl + 1.15 })
+		rec.keys = {
+			{ 0, "guard" }, { 0.4, "gazeStare" }, { lock - 0.55, "gazeStare" }, { rl - 0.14, "throwWind" }, { rl + 0.05, "throwRelease", "back" },
+			{ rd[1], "throwFollow" }, { rd[1] + 0.22, "throwReach" }, { rd[2] - 0.08, "throwDraw" }, { D, "guard" },
+		}
+	end,
+	eval = function(A, rec, t, w)
+		local rl = cfgv(rec, "ReleaseAt", 2.1)
+		local rd = cfgv(rec, "Redraw", { rl + 0.65, rl + 1.15 })
+		A:playKeys(rec.keys, t, w)
+		local hip = A.bones.B_ScabL
+		if hip then
+			local target = hip.rel.Position + Vector3.new(-0.15, 0.55, 0.15) * A.U
+			A.F.reach[-1] = { target = target, w = envelope(t, rd[1], rd[1] + 0.2, (rd[1] + rd[2]) / 2 + 0.05, rd[2]) * w, pole = Vector3.new(-1, -0.2, 0.9) }
+		end
+		if t < rl then
+			A.F.look, A.F.lookW = rec.rootTarget, w
+		end
+		-- a faint tremor of power while the eye reads the target
+		A.F.tremble = math.max(A.F.tremble, 0.35 * envelope(t, 0.5, 0.8, rl - 0.4, rl - 0.1))
+	end,
+}
+
+-- Execution: the throw hit. He straightens, blitzes in, grips the hilt in the victim's chest with the
+-- left hand and front-kicks them off the blade, then shakes the blade clean.
+ACT.Execution = {
+	setup = function(A, rec)
+		local d0, d1 = cfgv(rec, "DashStart", 0.6), cfgv(rec, "DashEnd", 0.98)
+		local grab, kick = cfgv(rec, "GrabAt", 1.04), cfgv(rec, "KickAt", 1.32)
+		local D = cfgv(rec, "Duration", 2.7)
+		rec.keys = {
+			{ 0, "throwFollow" }, { 0.42, "exReady" }, { d0 - 0.02, "exReady" }, { d0 + 0.06, "exDash", "out" }, { d1 - 0.02, "exDash" },
+			{ grab, "exGrab", "out" }, { kick - 0.12, "exChamber" }, { kick, "exKick", "in" }, { kick + 0.22, "exKick" },
+			{ kick + 0.62, "exFollow" }, { D - 0.55, "exChiburi", "out" }, { D, "guard" },
+		}
+	end,
+	eval = function(A, rec, t, w)
+		local d0, d1 = cfgv(rec, "DashStart", 0.6), cfgv(rec, "DashEnd", 0.98)
+		local grab, kick = cfgv(rec, "GrabAt", 1.04), cfgv(rec, "KickAt", 1.32)
+		local fast = t > d0 and t < kick + 0.15
+		A:playKeys(rec.keys, t, w, if fast then 0.35 else 1)
+		local v = rec.rootTarget
+		if v then
+			-- the hilt sticks out of the victim's chest toward him (a player is not scaled with him)
+			local flatV = Vector3.new(v.X, 0, v.Z)
+			local toward = if flatV.Magnitude > 0.1 then -flatV.Unit else Vector3.new(0, 0, 1)
+			-- BossClient sets rec.hilt to where it sticks the thrown copy (35% of a blade length out of
+			-- the chest); without it, a player's chest is taken as 0.75 units above their root
+			local arm = A.arms[-1]
+			local blade = if arm and arm.saber and arm.tip then (arm.tip.restRel.Position - arm.saber.restRel.Position).Magnitude else 4.4 * A.U
+			local hilt = rec.hilt or (v + Vector3.new(0, 0.75 * A.U, 0) + toward * (blade * 0.35))
+			A.F.reach[-1] = { target = hilt, w = envelope(t, d1 - 0.1, grab, kick - 0.02, kick + 0.06) * w, pole = Vector3.new(-1, -0.6, 0.3) }
+			if t < kick + 0.5 then
+				A.F.look, A.F.lookW = v + Vector3.new(0, 1.2 * A.U, 0), w
+			end
+		end
+		A.F.tremble = math.max(A.F.tremble, 0.25 * envelope(t, 0.15, 0.3, d0 - 0.1, d0))
 	end,
 }
 

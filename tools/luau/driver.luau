@@ -75,7 +75,12 @@ for ci, clip in SCEN.clips do
 				w *= 1 - k * k * (3 - 2 * k)
 			end
 			rec.w = w
-			rec.rootTarget = Vector3.new(0, 0, -12 * U)
+			if clip.victim then
+				-- a player standing clip.victim studs ahead (root 3 studs above the ground)
+				rec.rootTarget = vr:PointToObjectSpace(Vector3.new(0, -HIPS.Y + 3.0 * U, -clip.victim * U))
+			else
+				rec.rootTarget = Vector3.new(0, 0, -12 * U)
+			end
 			table.insert(actions, rec)
 		end
 		local res = A:step({

@@ -10,6 +10,8 @@
 	           Tank Cleaver.
 	           At CapeHealth he tears off his cape ("Remove Cape").
 	  Phase 2  at EyeHealth he tears off the eyepatch and opens the Ultimate Eye ("Remove Eyepatch").
+	           Straight after, once per fight, Piercing Gaze: a close-up on the eye, then a saber
+	           hurled at one player's chest (dodgeable). A hit starts the Execution cutscene.
 	           Basic attacks run EyeSpeedBoost times faster and two eye abilities unlock:
 	           Thousand Cuts (a 3x speed flurry that ends in a cross-shaped slash wave) and
 	           Phantom Step (reads the target's movement, cuts a pentagram of slashes around them,
@@ -113,7 +115,7 @@ local Config = {
 			Duration = 1.9,
 			Hits = { 0.32, 0.68, 1.12 },
 			Step = 1.6, -- studs he advances with every cut
-			Range = 11,
+			Range = 10, -- reach of each cut (the drawn slashes match it; a player's width is added)
 			Arc = 80, -- half-angle in front of him
 			Damage = 13,
 			FinalDamage = 20,
@@ -158,8 +160,8 @@ local Config = {
 			Flurry = { 0.75, 2.3 },
 			Slashes = 12,
 			Advance = 9,
-			Range = 12,
-			Arc = 95,
+			Range = 10,
+			Arc = 85,
 			TickDamage = 8,
 			Final = { 2.3, 2.95 },
 			FinalAt = 2.62,
@@ -185,6 +187,34 @@ local Config = {
 			CoreRadius = 7,
 			CoreDamage = 30,
 			Recover = { 3.35, 4.8 },
+		},
+
+		PiercingGaze = {
+			-- once per fight, right after the Ultimate Eye opens: the camera closes in on his eye, a red
+			-- sight line follows the target, locks (turns white) and he hurls a saber at their chest.
+			-- Step off the line to dodge it. If it hits, the Execution cutscene plays.
+			Duration = 3.7, -- when the throw misses
+			Gaze = { 0.1, 1.35 }, -- the close-up on his eye (players within GazeRange see it)
+			GazeRange = 140,
+			LockAt = 1.85, -- the aim stops following the target here
+			ReleaseAt = 2.1,
+			Speed = 240,
+			Range = 110,
+			HitRadius = 2.2,
+			Damage = 15,
+			Redraw = { 2.75, 3.25 }, -- after a miss he draws a spare saber
+		},
+		Execution = {
+			-- the pinned victim: he blitzes in, grips the hilt and kicks them off the blade
+			Duration = 2.7,
+			DashStart = 0.6,
+			DashEnd = 0.98,
+			StandOff = 3.6, -- he stops this far from the victim
+			GrabAt = 1.04,
+			KickAt = 1.32,
+			KickDamage = 35,
+			Knockback = 125, -- the victim's launch speed (studs/s)
+			KnockUp = 55,
 		},
 
 		Death = {
@@ -811,6 +841,88 @@ return {
 		L = { sh = { -4, 0, -6 }, el = 16, aim = { 0.3, -0.9, 0.22 } },
 		fR = { 0.1, 0, -0.2, 0 },
 		fL = { 0.1, 0, 0.2, 0 },
+	},
+
+	-- ------------------------------------------------------------------ Piercing Gaze / Execution
+	gazeStare = { -- the eye locks on: utterly still, chin down, both blades lowered
+		hips = { 0, 4, 0, 0, -0.18, 0 },
+		spine = { 2, 0, 0 },
+		chest = { 3, -4, 0 },
+		neck = { -6, 0, 0 },
+		head = { -8, 0, -6 },
+		R = { cl = { 0, 0, -2 }, sh = { 6, 0, -10 }, el = 14, aim = { 0.3, -0.94, -0.1 } },
+		L = { cl = { 0, 0, -2 }, sh = { 2, 0, -8 }, el = 18, aim = { 0.3, -0.9, 0.3 } },
+		fR = { 0.08, 0, -0.3, 0, -4 },
+		fL = { 0.14, 0, 0.3, 0, 8 },
+	},
+	exReady = { -- coiled to sprint: weight forward, right blade trailing, the empty left hand forward
+		hips = { -10, 0, 0, 0, -0.7, 0.1 },
+		spine = { -10, 0, 0 },
+		chest = { -10, 0, 0 },
+		head = { 24, 0, 0 },
+		R = { cl = { 0, 0, -4 }, sh = { -40, 0, 18 }, el = 30, aim = { 0.35, -0.2, 0.9 } },
+		L = { cl = { 0, 0, 4 }, sh = { 40, 0, 6 }, el = 40, aim = { 0, -0.6, -0.8 } },
+		fR = { 0.1, 0, 0.75, 0 },
+		fL = { 0.12, 0, -0.55, 0 },
+	},
+	exDash = { -- the blitz: flat out, the left hand reaching for the hilt
+		hips = { -18, 0, 0, 0, -1.0, 0 },
+		spine = { -14, 0, 0 },
+		chest = { -14, 0, 0 },
+		head = { 36, 0, 0 },
+		R = { sh = { -60, 0, 26 }, el = 10, aim = { 0.45, -0.1, 0.88 } },
+		L = { cl = { 0, 8, 6 }, sh = { 70, 0, 4 }, el = 12, aim = { 0, -0.3, -0.95 } },
+		fR = { 0.1, 0, -1.3, 0 },
+		fL = { 0.1, 0.35, 1.2, -14 },
+	},
+	exGrab = { -- planted, the left hand on the hilt (arm IK), the right knee starting to rise
+		hips = { 4, -10, 0, 0, -0.45, 0.05 },
+		spine = { 2, -6, 0 },
+		chest = { 2, -10, 0 },
+		head = { 0, 12, 0 },
+		R = { sh = { -24, 0, 30 }, el = 24, aim = { 0.6, -0.4, 0.7 } },
+		L = { cl = { 0, 10, 4 }, sh = { 76, 0, 0 }, el = 8, aim = { 0, 0.1, -1 } },
+		fR = { 0.1, 0.2, 0.25, -10 },
+		fL = { 0.12, 0, -0.6, 0, 6 },
+	},
+	exChamber = { -- knee up, leaning back, the hilt gripped
+		hips = { 10, -14, 0, 0, -0.3, 0.15 },
+		spine = { 6, -6, 0 },
+		chest = { 6, -10, 0 },
+		head = { -6, 14, 0 },
+		R = { sh = { -10, 0, 50 }, el = 30, aim = { 0.8, -0.2, 0.5 } },
+		L = { cl = { 0, 10, 4 }, sh = { 70, 0, 0 }, el = 20, aim = { 0, 0.1, -1 } },
+		fR = { 0.1, 2.4, -0.9, 30 },
+		fL = { 0.12, 0, -0.5, 0, 6 },
+	},
+	exKick = { -- the push kick to the chest; the left hand rips the blade out and back
+		hips = { 16, -18, 0, 0, -0.25, 0.4 },
+		spine = { 10, -8, 0 },
+		chest = { 10, -12, 0 },
+		head = { -10, 16, 0 },
+		R = { sh = { -5, 0, 60 }, el = 20, aim = { 0.85, -0.3, 0.4 } },
+		L = { cl = { 0, -6, 6 }, sh = { -30, 0, 55 }, el = 10, aim = { 0.85, 0.3, 0.45 } },
+		fR = { 0.08, 3.1, -3.4, 65 },
+		fL = { 0.12, 0, 0.0, 0, 10 },
+	},
+	exFollow = { -- the leg comes down, both blades out, watching the victim fly
+		hips = { 6, -8, 0, 0, -0.35, 0.1 },
+		spine = { 4, -4, 0 },
+		chest = { 4, -6, 0 },
+		head = { 0, 6, 0 },
+		R = { sh = { 8, 0, 34 }, el = 20, aim = { 0.7, -0.6, -0.3 } },
+		L = { sh = { 10, 0, 40 }, el = 14, aim = { 0.75, -0.55, -0.35 } },
+		fR = { 0.1, 0.5, -0.9, 10 },
+		fL = { 0.12, 0, 0.1, 0, 8 },
+	},
+	exChiburi = { -- the recovered blade snapped down to shake it clean
+		hips = { 0, 0, 0, 0, -0.26, 0 },
+		chest = { 2, 0, 0 },
+		head = { -2, 0, 0 },
+		R = { sh = { 8, 0, -6 }, el = 18, aim = { 0.3, -0.9, -0.3 } },
+		L = { sh = { 12, 0, 18 }, el = 10, aim = { 0.36, -0.93, 0.08 } },
+		fR = { 0.08, 0, -0.35, 0 },
+		fL = { 0.12, 0, 0.3, 0 },
 	},
 
 	-- ------------------------------------------------------------------ Death
@@ -1769,7 +1881,8 @@ function Animator:scabbardLayer(inp)
 			local hip, knee = leg.upper.rel.Position, leg.lower.rel.Position
 			local fwd = math.atan2(-(knee.Z - hip.Z), -(knee.Y - hip.Y))
 			local hipsPitch = self.acc.B_Hips.r.X
-			push = math.max(0, fwd + hipsPitch) * 0.95
+			-- capped: a high kick shoves it forward, it never swings up past the horizontal
+			push = math.min(math.max(0, fwd + hipsPitch) * 0.95, 0.9)
 		end
 		local run = self.gait.run * self.gait.walkW
 		push *= 1 - 0.85 * run
@@ -2154,6 +2267,72 @@ ACT.PhantomStep = {
 		if t < c.Steps[1] then
 			A.F.look, A.F.lookW = rec.rootTarget, w
 		end
+	end,
+}
+
+-- Piercing Gaze: the stare (camera close-up on the eye), a slow javelin wind-up while the sight line
+-- tracks the target, the throw; after a miss he draws a spare like the Saber Throw.
+ACT.PiercingGaze = {
+	setup = function(A, rec)
+		local lock, rl = cfgv(rec, "LockAt", 1.85), cfgv(rec, "ReleaseAt", 2.1)
+		local D = cfgv(rec, "Duration", 3.7)
+		local rd = cfgv(rec, "Redraw", { rl + 0.65, rl + 1.15 })
+		rec.keys = {
+			{ 0, "guard" }, { 0.4, "gazeStare" }, { lock - 0.55, "gazeStare" }, { rl - 0.14, "throwWind" }, { rl + 0.05, "throwRelease", "back" },
+			{ rd[1], "throwFollow" }, { rd[1] + 0.22, "throwReach" }, { rd[2] - 0.08, "throwDraw" }, { D, "guard" },
+		}
+	end,
+	eval = function(A, rec, t, w)
+		local rl = cfgv(rec, "ReleaseAt", 2.1)
+		local rd = cfgv(rec, "Redraw", { rl + 0.65, rl + 1.15 })
+		A:playKeys(rec.keys, t, w)
+		local hip = A.bones.B_ScabL
+		if hip then
+			local target = hip.rel.Position + Vector3.new(-0.15, 0.55, 0.15) * A.U
+			A.F.reach[-1] = { target = target, w = envelope(t, rd[1], rd[1] + 0.2, (rd[1] + rd[2]) / 2 + 0.05, rd[2]) * w, pole = Vector3.new(-1, -0.2, 0.9) }
+		end
+		if t < rl then
+			A.F.look, A.F.lookW = rec.rootTarget, w
+		end
+		-- a faint tremor of power while the eye reads the target
+		A.F.tremble = math.max(A.F.tremble, 0.35 * envelope(t, 0.5, 0.8, rl - 0.4, rl - 0.1))
+	end,
+}
+
+-- Execution: the throw hit. He straightens, blitzes in, grips the hilt in the victim's chest with the
+-- left hand and front-kicks them off the blade, then shakes the blade clean.
+ACT.Execution = {
+	setup = function(A, rec)
+		local d0, d1 = cfgv(rec, "DashStart", 0.6), cfgv(rec, "DashEnd", 0.98)
+		local grab, kick = cfgv(rec, "GrabAt", 1.04), cfgv(rec, "KickAt", 1.32)
+		local D = cfgv(rec, "Duration", 2.7)
+		rec.keys = {
+			{ 0, "throwFollow" }, { 0.42, "exReady" }, { d0 - 0.02, "exReady" }, { d0 + 0.06, "exDash", "out" }, { d1 - 0.02, "exDash" },
+			{ grab, "exGrab", "out" }, { kick - 0.12, "exChamber" }, { kick, "exKick", "in" }, { kick + 0.22, "exKick" },
+			{ kick + 0.62, "exFollow" }, { D - 0.55, "exChiburi", "out" }, { D, "guard" },
+		}
+	end,
+	eval = function(A, rec, t, w)
+		local d0, d1 = cfgv(rec, "DashStart", 0.6), cfgv(rec, "DashEnd", 0.98)
+		local grab, kick = cfgv(rec, "GrabAt", 1.04), cfgv(rec, "KickAt", 1.32)
+		local fast = t > d0 and t < kick + 0.15
+		A:playKeys(rec.keys, t, w, if fast then 0.35 else 1)
+		local v = rec.rootTarget
+		if v then
+			-- the hilt sticks out of the victim's chest toward him (a player is not scaled with him)
+			local flatV = Vector3.new(v.X, 0, v.Z)
+			local toward = if flatV.Magnitude > 0.1 then -flatV.Unit else Vector3.new(0, 0, 1)
+			-- BossClient sets rec.hilt to where it sticks the thrown copy (35% of a blade length out of
+			-- the chest); without it, a player's chest is taken as 0.75 units above their root
+			local arm = A.arms[-1]
+			local blade = if arm and arm.saber and arm.tip then (arm.tip.restRel.Position - arm.saber.restRel.Position).Magnitude else 4.4 * A.U
+			local hilt = rec.hilt or (v + Vector3.new(0, 0.75 * A.U, 0) + toward * (blade * 0.35))
+			A.F.reach[-1] = { target = hilt, w = envelope(t, d1 - 0.1, grab, kick - 0.02, kick + 0.06) * w, pole = Vector3.new(-1, -0.6, 0.3) }
+			if t < kick + 0.5 then
+				A.F.look, A.F.lookW = v + Vector3.new(0, 1.2 * A.U, 0), w
+			end
+		end
+		A.F.tremble = math.max(A.F.tremble, 0.25 * envelope(t, 0.15, 0.3, d0 - 0.1, d0))
 	end,
 }
 
@@ -3049,13 +3228,38 @@ local function livingVictims(): { Victim }
 	return list
 end
 
+-- Hits are judged where each player is on their OWN screen: the server hears about a player's
+-- movement about half a ping late, so their root is led by that much of their velocity. A player
+-- who dodged in time on their screen is not hit by a stale position.
+local function lead(v: Victim): number
+	local ok, ping = pcall(function()
+		return v.player:GetNetworkPing()
+	end)
+	if not ok or type(ping) ~= "number" then
+		return 0.05
+	end
+	return math.clamp(ping * 0.5 + 0.02, 0, 0.16)
+end
+
+local function seenRoot(v: Victim): Vector3
+	local vel = v.root.AssemblyLinearVelocity
+	vel = Vector3.new(vel.X, math.clamp(vel.Y, -60, 60), vel.Z)
+	if vel.Magnitude > 70 then
+		vel = vel.Unit * 70
+	end
+	return v.root.Position + vel * lead(v)
+end
+
 -- A player's body as a vertical segment, feet to head (works for R6, R15 and scaled avatars).
-local function bodySegment(v: Victim): (Vector3, Vector3)
-	local p = v.root.Position
+-- raw = the replicated position (for aiming); otherwise the led position (for judging hits).
+local function bodySegment(v: Victim, raw: boolean?): (Vector3, Vector3)
+	local p = if raw then v.root.Position else seenRoot(v)
 	local half = v.root.Size.Y / 2
 	local legs = math.max(v.humanoid.HipHeight, 2)
 	return p - Vector3.new(0, half + legs, 0), p + Vector3.new(0, half + 1.6, 0)
 end
+
+local BODY_RADIUS = 1.1 -- a player's half-width (their arms and shoulders count, not just the spine)
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -3100,6 +3304,8 @@ local nextActionAt = 0
 local provokedUntil = 0
 local pendingCape = false
 local pendingEye = false
+local pendingImpale = false -- Piercing Gaze plays right after the eye opens...
+local impaleDone = false -- ...once per fight
 local cdUntil: { [string]: number } = {}
 for name in Cooldowns do
 	cdUntil[name] = 0
@@ -3602,7 +3808,7 @@ local function frontalHits(pos: Vector3, look: Vector3, range: number, arcDeg: n
 		local closest = closestOnSegment(pos, a, b)
 		local off = closest - pos
 		local d = flat(off).Magnitude
-		if d <= range and math.abs(off.Y) <= 7 * scale then
+		if d <= range + BODY_RADIUS and math.abs(off.Y) <= 7 * scale then
 			if d < 2.5 * scale or flat(off).Unit:Dot(look) >= cosA then
 				fn(v)
 			end
@@ -3657,12 +3863,16 @@ local function doRemoveEyepatch()
 	end
 	eyeOpen = true
 	pendingEye = false -- hits during the tear may have queued it again
+	if not impaleDone then
+		pendingImpale = true
+	end
 	model:SetAttribute("Enraged", true)
 	model:SetAttribute("Subtitle", Config.EyeSubtitle)
 	-- the eye opens with a pressure wave (knockback is applied by each client)
 	local radius = cfg.ShockRadius * scale
 	for _, v in livingVictims() do
-		if flatDist(v.root.Position, hrp.Position) <= radius and math.abs(v.root.Position.Y - hrp.Position.Y) < 10 * scale then
+		local p = seenRoot(v)
+		if flatDist(p, hrp.Position) <= radius + BODY_RADIUS and math.abs(p.Y - hrp.Position.Y) < 10 * scale then
 			hurt(v, cfg.ShockDamage)
 		end
 	end
@@ -3919,9 +4129,10 @@ local function doCleave()
 		local a, b = bodySegment(v)
 		local feetAbove = a.Y - impact.Y
 		if feetAbove <= 5 * scale and b.Y >= impact.Y - 4 * scale then
-			if flatDist(v.root.Position, impact) <= radius then
+			local p = seenRoot(v)
+			if flatDist(p, impact) <= radius + BODY_RADIUS then
 				hurt(v, cfg.Damage)
-			elseif pointSegmentDistance(Vector3.new(v.root.Position.X, impact.Y, v.root.Position.Z), impact, Vector3.new(fissureEnd.X, impact.Y, fissureEnd.Z)) <= half then
+			elseif pointSegmentDistance(Vector3.new(p.X, impact.Y, p.Z), impact, Vector3.new(fissureEnd.X, impact.Y, fissureEnd.Z)) <= half + BODY_RADIUS * 0.5 then
 				hurt(v, cfg.FissureDamage)
 			end
 		end
@@ -3996,7 +4207,8 @@ local function doThousandCuts()
 				local a, b = bodySegment(v)
 				local lo = Vector3.new(prev.X, a.Y, prev.Z)
 				local hi = Vector3.new(front.X, a.Y, front.Z)
-				if pointSegmentDistance(Vector3.new(v.root.Position.X, a.Y, v.root.Position.Z), lo, hi) <= half and math.abs(v.root.Position.Y - origin.Y) <= 9 * scale then
+				local p = seenRoot(v)
+				if pointSegmentDistance(Vector3.new(p.X, a.Y, p.Z), lo, hi) <= half + BODY_RADIUS * 0.5 and math.abs(p.Y - origin.Y) <= 9 * scale then
 					hitSet[v.player] = true
 					hurt(v, cfg.WaveDamage)
 				end
@@ -4086,7 +4298,8 @@ local function doPhantomStep()
 	for _, v in livingVictims() do
 		local feet = bodySegment(v)
 		if math.abs(feet.Y - (centerRoot.Y - rootHeight())) <= 8 * scale then
-			local p = Vector3.new(v.root.Position.X, 0, v.root.Position.Z)
+			local seen = seenRoot(v)
+			local p = Vector3.new(seen.X, 0, seen.Z)
 			local count = 0
 			for _, l in lines do
 				local a = Vector3.new(l[1].X, 0, l[1].Z)
@@ -4096,7 +4309,7 @@ local function doPhantomStep()
 				end
 			end
 			local dmg = math.min(count, 3) * cfg.LineDamage
-			if flatDist(v.root.Position, centerRoot) <= coreR then
+			if flatDist(seen, centerRoot) <= coreR then
 				dmg += cfg.CoreDamage
 			end
 			if dmg > 0 then
@@ -4104,6 +4317,127 @@ local function doPhantomStep()
 			end
 		end
 	end
+	if not waitUntil(start + cfg.Duration) then
+		return
+	end
+	endAction()
+end
+
+-- ---- Ultimate Eye: Piercing Gaze, then the Execution (once per fight) -------------------------------
+local function chestOf(v: Victim, raw: boolean?): Vector3
+	local feet, head = bodySegment(v, raw)
+	return feet:Lerp(head, 0.66)
+end
+
+-- The pinned victim: he blitzes in, grips the hilt and kicks them off the blade. The victim's own
+-- client freezes them until the kick and then launches them (players own their physics).
+local function runExecution(v: Victim)
+	local cfg = Actions.Execution
+	local start = beginAction("Execution", v.root.Position, 1, v.player)
+	refreshRayFilter()
+	local from = hrp.Position
+	local off = flat(v.root.Position - from)
+	local dir = if off.Magnitude > 0.5 then off.Unit else lookFlat()
+	local standDist = math.max(off.Magnitude - cfg.StandOff * scale, 0)
+	local goal = rootOnGround(clampTravel(from, from + dir * standDist, 1.5 * scale), from.Y)
+	local yaw = yawOf(dir) or (yawOf(hrp.CFrame.LookVector) or 0)
+	startMotion({ Motion.key(cfg.DashStart, from, yaw, "l"), Motion.key(cfg.DashEnd, goal, yaw, "o") }, start)
+	if not waitUntil(start + cfg.KickAt) then
+		return
+	end
+	local now = victimOf(v.player)
+	if now and flatDist(seenRoot(now), hrp.Position) <= (cfg.StandOff + 7) * scale then
+		hurt(now, cfg.KickDamage)
+	end
+	if not waitUntil(start + cfg.Duration) then
+		return
+	end
+	endAction()
+end
+
+local function doPiercingGaze()
+	local cfg = Actions.PiercingGaze
+	pendingImpale = false
+	impaleDone = true
+	local t = target
+	if not t then
+		return
+	end
+	local start = beginAction("PiercingGaze", chestOf(t, true), 1, t.player)
+	setFacing("target", TURN.lock)
+	-- the eye reads the target: the sight line follows them until the lock
+	while alive() and serverNow() < start + cfg.LockAt do
+		refreshTarget()
+		if target then
+			model:SetAttribute("ActionTarget", chestOf(target, true))
+		end
+		task.wait(0.05)
+	end
+	if not alive() then
+		return
+	end
+	refreshTarget()
+	t = target
+	refreshRayFilter()
+	-- locked: the throw flies straight down this line (no homing), so stepping off it dodges
+	local origin = hrp.CFrame:PointToWorldSpace(Vector3.new(-HAND_OFFSET.X, HAND_OFFSET.Y, HAND_OFFSET.Z) * scale)
+	local last = model:GetAttribute("ActionTarget")
+	local aim = if t then chestOf(t, true) elseif typeof(last) == "Vector3" then last else frontPoint()
+	local dir = aim - origin
+	if dir.Magnitude < 0.5 then
+		dir = lookFlat()
+	end
+	dir = dir.Unit
+	local range = cfg.Range * scale
+	local wall = workspace:Raycast(origin, dir * range, rayParams)
+	local impact = if wall then wall.Position else origin + dir * range
+	model:SetAttribute("ActionTarget", impact)
+	setFacing("point", TURN.windUp, impact)
+
+	local release = start + cfg.ReleaseAt
+	if not waitUntil(release) then
+		return
+	end
+	local speed = cfg.Speed * scale
+	local total = (impact - origin).Magnitude / speed
+	local radius = cfg.HitRadius * scale
+	local prev = origin
+	local struck: Victim? = nil
+	while alive() do
+		local u = math.min((serverNow() - release) / math.max(total, 1e-3), 1)
+		local tip = origin:Lerp(impact, u)
+		local best, bestD = nil, math.huge
+		for _, v in livingVictims() do
+			local a, b = bodySegment(v)
+			if segmentDistance(prev, tip, a, b) <= radius then
+				local d = (v.root.Position - prev).Magnitude -- the first body along the flight
+				if d < bestD then
+					best, bestD = v, d
+				end
+			end
+		end
+		if best then
+			struck = best
+			break
+		end
+		prev = tip
+		if u >= 1 then
+			break
+		end
+		task.wait()
+	end
+	if not alive() then
+		return
+	end
+	if struck then
+		hurt(struck, cfg.Damage)
+		local still = victimOf(struck.player)
+		if still then
+			runExecution(still)
+			return
+		end
+	end
+	-- missed: he draws a spare saber and fights on
 	if not waitUntil(start + cfg.Duration) then
 		return
 	end
@@ -4119,6 +4453,8 @@ local function resetBoss()
 	humanoid.Health = humanoid.MaxHealth
 	pendingCape = false
 	pendingEye = false
+	pendingImpale = false
+	impaleDone = false
 	challenged = false
 	if capeOff or eyeOpen then
 		capeOff = false
@@ -4319,6 +4655,10 @@ local function combatStep(v: Victim, clock: number)
 		end
 		if pendingEye then
 			doRemoveEyepatch()
+			return
+		end
+		if pendingImpale then
+			doPiercingGaze()
 			return
 		end
 		local attack = chooseAttack(v, dist)
@@ -4568,6 +4908,7 @@ end
 local localPlayer = Players.LocalPlayer
 local AM = Animator.math
 local clamp01, progress, smooth, smoother, easeOut, envelope, approach = AM.clamp01, AM.progress, AM.smooth, AM.smoother, AM.easeOut, AM.envelope, AM.approach
+local easeIn = AM.easeIn
 local function noise(t: number, seed: number): number
 	return math.clamp(math.noise(t, seed, 0.37) * 2, -1, 1)
 end
@@ -5046,6 +5387,465 @@ local function glint(pos: Vector3, size: number, color: Color3, life: number)
 	end)
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- Ultimate Eye effects: crimson lightning, the Ouroboros sigil, hitbox telegraphs, impact frames
+-- ---------------------------------------------------------------------------------------------
+local C_INK = Color3.fromRGB(14, 0, 4)
+local C_HOT = Color3.fromRGB(255, 214, 214)
+
+-- addFx, with the parts placed on the very first frame (no flash at the world origin)
+local function addFxNow(life: number, inst: { Instance }, update)
+	update(0, 0, 0)
+	addFx(life, inst, update)
+end
+
+local function flatUnit(v: Vector3, fallback: Vector3?): Vector3
+	local f = Vector3.new(v.X, 0, v.Z)
+	return if f.Magnitude > 1e-3 then f.Unit else (fallback or Vector3.new(0, 0, -1))
+end
+
+-- Jagged electric arc from a to b; its kinks re-roll a few times while it lives.
+local function lightning(a: Vector3, b: Vector3, color: Color3, life: number, thick: number, jag: number?)
+	local len0 = (b - a).Magnitude
+	if len0 < 0.05 then
+		return
+	end
+	local segs = 7
+	local glow, core = {}, {}
+	local all = {}
+	for i = 1, segs do
+		glow[i] = fxPart({ Color = color, Material = Enum.Material.Neon, Size = Vector3.one * 0.05 })
+		core[i] = fxPart({ Color = Color3.new(1, 1, 1), Material = Enum.Material.Neon, Size = Vector3.one * 0.05 })
+		table.insert(all, glow[i])
+		table.insert(all, core[i])
+	end
+	local amp = (jag or 0.2) * len0
+	local pts = {}
+	local rolled = -1
+	local function roll()
+		local d = b - a
+		local u = d.Unit
+		local s1 = u:Cross(Vector3.yAxis)
+		if s1.Magnitude < 0.1 then
+			s1 = u:Cross(Vector3.xAxis)
+		end
+		s1 = s1.Unit
+		local s2 = u:Cross(s1).Unit
+		pts[1] = a
+		for i = 1, segs - 1 do
+			local k = i / segs
+			local off = (s1 * (math.random() - 0.5) + s2 * (math.random() - 0.5)) * 2 * amp * math.sin(math.pi * k)
+			pts[i + 1] = a + d * k + off
+		end
+		pts[segs + 1] = b
+	end
+	addFxNow(life, all, function(age, u)
+		local step = math.floor(age / 0.045)
+		if step ~= rolled then
+			rolled = step
+			roll()
+		end
+		local fade = u ^ 1.4
+		for i = 1, segs do
+			local p0, p1 = pts[i], pts[i + 1]
+			local len = (p1 - p0).Magnitude
+			if len > 1e-3 then
+				local cf = CFrame.lookAt((p0 + p1) / 2, p1)
+				glow[i].Size = Vector3.new(thick, thick, len + thick * 0.5)
+				glow[i].CFrame = cf
+				glow[i].Transparency = 0.2 + 0.8 * fade
+				core[i].Size = Vector3.new(thick * 0.35, thick * 0.35, len + thick * 0.2)
+				core[i].CFrame = cf
+				core[i].Transparency = fade
+			end
+		end
+	end)
+end
+
+-- The Ouroboros mark spreading on the ground: two counter-turning rings, a hexagram, a ring of scales.
+local function ouroSigil(center: Vector3, radius: number, life: number, color: Color3?)
+	local col = color or C_RED
+	local parts = {}
+	local function mk(n: number, c: Color3): { BasePart }
+		local list = {}
+		for i = 1, n do
+			list[i] = fxPart({ Color = c, Material = Enum.Material.Neon, Size = Vector3.one * 0.05, Transparency = 1 })
+			table.insert(parts, list[i])
+		end
+		return list
+	end
+	local outer, inner, hexa, scales = mk(32, col), mk(24, col), mk(6, col), mk(16, C_HOT)
+	local y = center.Y + 0.07 * S
+	local base = CFrame.new(center.X, y, center.Z)
+	addFxNow(life, parts, function(age, u)
+		local grow = easeOut(clamp01(age / 0.4), 3)
+		local alpha = grow * (1 - smooth(progress(0.72, 1, u)))
+		local r = radius * (0.8 + 0.2 * grow)
+		local spin = age * 0.55
+		local tr = 1 - 0.92 * alpha
+		for i, p in outer do
+			local a = (i - 1) / #outer * TAU + spin
+			p.Size = Vector3.new(0.2 * S, 0.05 * S, TAU * r / #outer * 1.08)
+			p.CFrame = base * CFrame.Angles(0, a, 0) * CFrame.new(r, 0, 0)
+			p.Transparency = tr
+		end
+		local r2 = r * 0.8
+		for i, p in inner do
+			local a = (i - 1) / #inner * TAU - spin * 1.4
+			p.Size = Vector3.new(0.12 * S, 0.05 * S, TAU * r2 / #inner * 0.7)
+			p.CFrame = base * CFrame.Angles(0, a, 0) * CFrame.new(r2, 0, 0)
+			p.Transparency = tr
+		end
+		-- hexagram: two triangles inscribed in the inner ring
+		local r3 = r2 * 0.97
+		for k = 0, 1 do
+			for j = 0, 2 do
+				local a1 = -spin * 0.6 + k * math.pi + j * TAU / 3
+				local a2 = a1 + TAU / 3
+				local v1 = Vector3.new(math.cos(a1) * r3, 0, math.sin(a1) * r3)
+				local v2 = Vector3.new(math.cos(a2) * r3, 0, math.sin(a2) * r3)
+				local p = hexa[k * 3 + j + 1]
+				p.Size = Vector3.new(0.14 * S, 0.05 * S, (v2 - v1).Magnitude)
+				p.CFrame = base * CFrame.lookAt((v1 + v2) / 2, v2)
+				p.Transparency = tr
+			end
+		end
+		-- the snake's scales between the rings
+		for i, p in scales do
+			local a = (i - 1) / #scales * TAU + spin * 0.5
+			p.Size = Vector3.new(0.1 * S, 0.05 * S, r * 0.13)
+			p.CFrame = base * CFrame.Angles(0, a, 0) * CFrame.new(r * 0.9, 0, 0) * CFrame.Angles(0, math.rad(40), 0)
+			p.Transparency = 1 - 0.8 * alpha
+		end
+	end)
+end
+
+-- Hitbox telegraphs: exactly the area an attack hits, drawn on the ground. A bright timing line runs
+-- from the inside out and reaches the edge when the hit lands (fillAt seconds); then it flashes.
+local function telegraphSector(origin: Vector3, look: Vector3, range: number, arcDeg: number, fillAt: number, life: number)
+	local g = groundAt(origin, 16)
+	local yaw = math.atan2(-look.X, -look.Z)
+	local base = CFrame.new(origin.X, g.Y + 0.06 * S, origin.Z) * CFrame.Angles(0, yaw, 0) -- -Z = look
+	local half = math.rad(math.min(arcDeg, 179))
+	local nArc = 18
+	local parts = {}
+	local edge, sweep, sides, hatch = {}, {}, {}, {}
+	for i = 1, nArc do
+		edge[i] = fxPart({ Color = C_RED, Material = Enum.Material.Neon, Size = Vector3.one * 0.05, Transparency = 1 })
+		sweep[i] = fxPart({ Color = C_HOT, Material = Enum.Material.Neon, Size = Vector3.one * 0.05, Transparency = 1 })
+		table.insert(parts, edge[i])
+		table.insert(parts, sweep[i])
+	end
+	for i = 1, 2 do
+		sides[i] = fxPart({ Color = C_RED, Material = Enum.Material.Neon, Size = Vector3.one * 0.05, Transparency = 1 })
+		table.insert(parts, sides[i])
+	end
+	for i = 1, 7 do
+		hatch[i] = fxPart({ Color = C_RED, Material = Enum.Material.SmoothPlastic, Size = Vector3.one * 0.05, Transparency = 1 })
+		table.insert(parts, hatch[i])
+	end
+	local function arcPoint(a: number, r: number): Vector3
+		return Vector3.new(-math.sin(a) * r, 0, -math.cos(a) * r)
+	end
+	addFxNow(life, parts, function(age, u)
+		local inA = smooth(clamp01(age / 0.12))
+		local flash = envelope(age, fillAt - 0.02, fillAt, fillAt + 0.04, fillAt + 0.2)
+		local out = smooth(progress(fillAt + 0.05, life, age))
+		local alpha = inA * (1 - out)
+		local k = clamp01(age / math.max(fillAt, 1e-3))
+		for i = 1, nArc do
+			local a0 = -half + (i - 1) / nArc * 2 * half
+			local a1 = -half + i / nArc * 2 * half
+			local p0, p1 = arcPoint(a0, range), arcPoint(a1, range)
+			local e = edge[i]
+			e.Size = Vector3.new(0.16 * S, 0.04 * S, (p1 - p0).Magnitude * 1.05)
+			e.CFrame = base * CFrame.lookAt((p0 + p1) / 2, p1)
+			e.Transparency = 1 - (0.85 * alpha + 0.15 * flash)
+			e.Color = C_RED:Lerp(Color3.new(1, 1, 1), flash)
+			local rs = range * k
+			local q0, q1 = arcPoint(a0, rs), arcPoint(a1, rs)
+			local sw = sweep[i]
+			sw.Size = Vector3.new(0.1 * S, 0.04 * S, math.max((q1 - q0).Magnitude * 1.05, 0.05))
+			sw.CFrame = base * CFrame.lookAt((q0 + q1) / 2 + Vector3.new(0, 0.01 * S, 0), q1 + Vector3.new(0, 0.01 * S, 0))
+			sw.Transparency = if rs < 0.3 then 1 else 1 - 0.7 * alpha * (1 - flash)
+		end
+		for i, sgn in { -1, 1 } do
+			local p1 = arcPoint(half * sgn, range)
+			local sd = sides[i]
+			sd.Size = Vector3.new(0.16 * S, 0.04 * S, range)
+			sd.CFrame = base * CFrame.lookAt(p1 / 2, p1)
+			sd.Transparency = 1 - (0.85 * alpha + 0.15 * flash)
+		end
+		for i, h in hatch do
+			local a = -half + (i - 0.5) / #hatch * 2 * half
+			local p1 = arcPoint(a, range * 0.97)
+			h.Size = Vector3.new(0.06 * S, 0.03 * S, range * 0.97)
+			h.CFrame = base * CFrame.lookAt(p1 / 2, p1)
+			h.Transparency = 1 - 0.35 * alpha
+		end
+	end)
+end
+
+local function telegraphCircle(center: Vector3, radius: number, fillAt: number, life: number)
+	local g = groundAt(center, 16)
+	local base = CFrame.new(center.X, g.Y + 0.06 * S, center.Z)
+	local n = 28
+	local parts, ring, timing = {}, {}, {}
+	for i = 1, n do
+		ring[i] = fxPart({ Color = C_RED, Material = Enum.Material.Neon, Size = Vector3.one * 0.05, Transparency = 1 })
+		timing[i] = fxPart({ Color = C_HOT, Material = Enum.Material.Neon, Size = Vector3.one * 0.05, Transparency = 1 })
+		table.insert(parts, ring[i])
+		table.insert(parts, timing[i])
+	end
+	local disc = fxPart({ Shape = Enum.PartType.Cylinder, Color = C_RED, Size = Vector3.new(0.04 * S, radius * 2, radius * 2), CFrame = base * CFrame.Angles(0, 0, math.pi / 2), Transparency = 1 })
+	table.insert(parts, disc)
+	addFxNow(life, parts, function(age, u)
+		local inA = smooth(clamp01(age / 0.12))
+		local flash = envelope(age, fillAt - 0.02, fillAt, fillAt + 0.04, fillAt + 0.2)
+		local alpha = inA * (1 - smooth(progress(fillAt + 0.05, life, age)))
+		local k = clamp01(age / math.max(fillAt, 1e-3))
+		for i = 1, n do
+			local a = (i - 1) / n * TAU + age * 0.4
+			local p = ring[i]
+			p.Size = Vector3.new(0.2 * S, 0.04 * S, TAU * radius / n * 1.08)
+			p.CFrame = base * CFrame.Angles(0, a, 0) * CFrame.new(radius, 0, 0)
+			p.Transparency = 1 - (0.85 * alpha + 0.15 * flash)
+			p.Color = C_RED:Lerp(Color3.new(1, 1, 1), flash)
+			local rt = radius * k
+			local q = timing[i]
+			q.Size = Vector3.new(0.1 * S, 0.04 * S, math.max(TAU * rt / n * 1.08, 0.05))
+			q.CFrame = base * CFrame.Angles(0, a, 0) * CFrame.new(rt, 0.01 * S, 0)
+			q.Transparency = if rt < 0.3 then 1 else 1 - 0.7 * alpha * (1 - flash)
+		end
+		disc.Transparency = 1 - 0.22 * alpha - 0.3 * flash
+	end)
+end
+
+local function telegraphLine(a: Vector3, b: Vector3, width: number, fillAt: number, life: number)
+	local ga = groundAt(a, 16)
+	local d = Vector3.new(b.X - a.X, 0, b.Z - a.Z)
+	local len = d.Magnitude
+	if len < 0.5 then
+		return
+	end
+	local base = CFrame.lookAt(Vector3.new(a.X, ga.Y + 0.06 * S, a.Z), Vector3.new(b.X, ga.Y + 0.06 * S, b.Z))
+	local parts = {}
+	local e1 = fxPart({ Color = C_RED, Material = Enum.Material.Neon, Transparency = 1 })
+	local e2 = fxPart({ Color = C_RED, Material = Enum.Material.Neon, Transparency = 1 })
+	local fill = fxPart({ Color = C_RED, Transparency = 1 })
+	local run = fxPart({ Color = C_HOT, Material = Enum.Material.Neon, Transparency = 1 })
+	parts = { e1, e2, fill, run }
+	addFxNow(life, parts, function(age, u)
+		local inA = smooth(clamp01(age / 0.1))
+		local flash = envelope(age, fillAt - 0.02, fillAt, fillAt + 0.04, fillAt + 0.2)
+		local alpha = inA * (1 - smooth(progress(fillAt + 0.05, life, age)))
+		local k = clamp01(age / math.max(fillAt, 1e-3))
+		for i, e in { e1, e2 } do
+			e.Size = Vector3.new(0.16 * S, 0.04 * S, len)
+			e.CFrame = base * CFrame.new((if i == 1 then -1 else 1) * width / 2, 0, -len / 2)
+			e.Transparency = 1 - (0.85 * alpha + 0.15 * flash)
+			e.Color = C_RED:Lerp(Color3.new(1, 1, 1), flash)
+		end
+		fill.Size = Vector3.new(width, 0.03 * S, len)
+		fill.CFrame = base * CFrame.new(0, -0.01 * S, -len / 2)
+		fill.Transparency = 1 - 0.25 * alpha - 0.3 * flash
+		local rl = math.max(len * k, 0.05)
+		run.Size = Vector3.new(width * 0.9, 0.035 * S, 0.14 * S)
+		run.CFrame = base * CFrame.new(0, 0.01 * S, -rl)
+		run.Transparency = if k >= 1 then 1 else 1 - 0.8 * alpha
+	end)
+end
+
+-- Anime impact frame: a burst of spikes around a white core, always on top.
+local function impactStar(pos: Vector3, size: number, color: Color3, life: number)
+	local holder = fxPart({ Size = Vector3.one * 0.1, Transparency = 1, CFrame = CFrame.new(pos) })
+	local gui = Instance.new("BillboardGui")
+	gui.Size = UDim2.fromScale(size * S, size * S)
+	gui.LightInfluence = 0
+	gui.AlwaysOnTop = true
+	gui.Adornee = holder
+	gui.Parent = holder
+	local spikes = {}
+	local n = 12
+	for i = 1, n do
+		local f = Instance.new("Frame")
+		f.AnchorPoint = Vector2.new(0.5, 0.5)
+		f.BorderSizePixel = 0
+		f.BackgroundColor3 = if i % 3 == 0 then Color3.new(1, 1, 1) else color
+		f.Parent = gui
+		spikes[i] = { f = f, a = (i - 1) / n * 360 + math.random(-10, 10), len = 0.3 + math.random() * 0.22 }
+	end
+	local core = Instance.new("Frame")
+	core.AnchorPoint = Vector2.new(0.5, 0.5)
+	core.Position = UDim2.fromScale(0.5, 0.5)
+	core.BackgroundColor3 = Color3.new(1, 1, 1)
+	core.BorderSizePixel = 0
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0.5, 0)
+	corner.Parent = core
+	core.Parent = gui
+	local function update(_age, u)
+		local grow = easeOut(clamp01(u * 4), 3)
+		local fade = smooth(progress(0.35, 1, u))
+		for _, sp in spikes do
+			local L = sp.len * grow
+			local a = math.rad(sp.a)
+			sp.f.Size = UDim2.fromScale(L, 0.035 * (1 - fade * 0.6))
+			sp.f.Position = UDim2.fromScale(0.5 + math.cos(a) * (0.06 + L / 2), 0.5 + math.sin(a) * (0.06 + L / 2))
+			sp.f.Rotation = sp.a
+			sp.f.BackgroundTransparency = fade
+		end
+		core.Size = UDim2.fromScale(0.22 * grow * (1 - 0.5 * fade), 0.22 * grow * (1 - 0.5 * fade))
+		core.BackgroundTransparency = fade
+	end
+	update(0, 0)
+	addFx(life, { holder }, update)
+end
+
+-- Anamorphic flare: a long horizontal streak with a white core (the eye opening, the lock-on).
+local function anamorphic(pos: Vector3, length: number, color: Color3, life: number)
+	local holder = fxPart({ Size = Vector3.one * 0.1, Transparency = 1, CFrame = CFrame.new(pos) })
+	local gui = Instance.new("BillboardGui")
+	gui.Size = UDim2.fromScale(length * S, length * 0.3 * S)
+	gui.LightInfluence = 0
+	gui.AlwaysOnTop = true
+	gui.Adornee = holder
+	gui.Parent = holder
+	local bars = {}
+	for i, spec in { { 1, 0.09, color }, { 0.7, 0.035, Color3.new(1, 1, 1) }, { 0.32, 0.5, color } } do
+		local f = Instance.new("Frame")
+		f.AnchorPoint = Vector2.new(0.5, 0.5)
+		f.Position = UDim2.fromScale(0.5, 0.5)
+		f.BorderSizePixel = 0
+		f.BackgroundColor3 = spec[3]
+		local grad = Instance.new("UIGradient")
+		grad.Transparency = NS(0, 1, 0.5, 0, 1, 1)
+		grad.Parent = f
+		if i == 3 then
+			grad.Rotation = 90
+		end
+		f.Parent = gui
+		bars[i] = { f = f, w = spec[1], h = spec[2] }
+	end
+	local function update(_age, u)
+		local k = math.sin(math.pi * clamp01(u)) ^ 0.5
+		for i, b in bars do
+			b.f.Size = UDim2.fromScale(b.w * (0.4 + 0.6 * k), b.h * (if i == 3 then k else 1))
+			b.f.BackgroundTransparency = 1 - k
+		end
+	end
+	update(0, 0)
+	addFx(life, { holder }, update)
+end
+
+-- A column of light shooting up from base (the eye opening, the Cleave impact).
+local function pillar(base: Vector3, height: number, radius: number, color: Color3, life: number)
+	local core = fxPart({ Shape = Enum.PartType.Cylinder, Color = Color3.new(1, 1, 1), Material = Enum.Material.Neon })
+	local glow = fxPart({ Shape = Enum.PartType.Cylinder, Color = color, Material = Enum.Material.Neon })
+	addFxNow(life, { core, glow }, function(age, u)
+		local up = easeOut(clamp01(age / 0.18), 3)
+		local thin = 1 - smooth(progress(0.2, 1, u))
+		local h = height * up
+		local cf = CFrame.new(base + Vector3.new(0, h / 2, 0)) * CFrame.Angles(0, 0, math.pi / 2)
+		core.Size = Vector3.new(h, radius * 0.6 * thin + 0.02, radius * 0.6 * thin + 0.02)
+		core.CFrame = cf
+		core.Transparency = 1 - thin
+		glow.Size = Vector3.new(h, radius * 2 * (0.6 + 0.4 * thin), radius * 2 * (0.6 + 0.4 * thin))
+		glow.CFrame = cf
+		glow.Transparency = 0.35 + 0.65 * (1 - thin)
+	end)
+end
+
+-- An expanding shell of force.
+local function dome(center: Vector3, r0: number, r1: number, color: Color3, life: number)
+	local shell = fxPart({ Shape = Enum.PartType.Ball, Color = color, Material = Enum.Material.ForceField })
+	local flash = fxPart({ Shape = Enum.PartType.Ball, Color = color, Material = Enum.Material.Neon })
+	addFxNow(life, { shell, flash }, function(age, u)
+		local r = r0 + (r1 - r0) * easeOut(u, 3)
+		shell.Size = Vector3.one * r * 2
+		shell.CFrame = CFrame.new(center)
+		shell.Transparency = smooth(u) * 0.9 + 0.1 * (1 - smooth(u))
+		local rf = r0 + (r1 - r0) * 0.35 * easeOut(clamp01(u * 3), 2)
+		flash.Size = Vector3.one * rf * 2
+		flash.CFrame = CFrame.new(center)
+		flash.Transparency = 0.55 + 0.45 * smooth(clamp01(u * 3))
+	end)
+end
+
+-- Red motes drawn in from all around into a point that moves (his eye) over `duration`.
+local function motesTo(getTarget: () -> Vector3, around: Vector3, radius: number, n: number, duration: number)
+	local parts, st = {}, {}
+	for i = 1, n do
+		local p = fxPart({ Shape = Enum.PartType.Ball, Color = if i % 4 == 0 then Color3.new(1, 1, 1) else C_RED, Material = Enum.Material.Neon, Size = Vector3.one * 0.05, Transparency = 1 })
+		parts[i] = p
+		local a, b = math.random() * TAU, (math.random() - 0.3) * 1.2
+		st[i] = {
+			from = around + Vector3.new(math.cos(a) * math.cos(b), math.sin(b) * 0.8 + 0.3, math.sin(a) * math.cos(b)) * radius * (0.6 + math.random() * 0.4),
+			delay = math.random() * duration * 0.55,
+			swirl = (math.random() - 0.5) * 2,
+		}
+	end
+	addFx(duration + 0.05, parts, function(age)
+		local target = getTarget()
+		for i, p in parts do
+			local s = st[i]
+			local k = clamp01((age - s.delay) / (duration - s.delay))
+			if k <= 0 then
+				p.Transparency = 1
+			else
+				local e = easeIn(k, 2.2)
+				local mid = s.from:Lerp(target, e)
+				local side = (s.from - target):Cross(Vector3.yAxis)
+				if side.Magnitude > 1e-3 then
+					mid += side.Unit * math.sin(math.pi * e) * s.swirl * radius * 0.25
+				end
+				p.Size = Vector3.one * (0.25 * S) * (1 - 0.7 * e)
+				p.CFrame = CFrame.new(mid)
+				p.Transparency = 0.1 + 0.9 * (1 - math.sin(math.pi * math.min(k * 1.6, 1)))
+			end
+		end
+	end)
+end
+
+-- Rocks torn loose by the pressure, drifting up and turning, then dropping.
+local function risingRocks(center: Vector3, count: number, color: Color3, material: Enum.Material, life: number)
+	local parts, st = {}, {}
+	for i = 1, count do
+		local sz = (0.3 + math.random() * 0.8) * S
+		parts[i] = fxPart({ Size = Vector3.new(sz, sz * 0.8, sz * 0.9), Color = color:Lerp(Color3.new(0, 0, 0), math.random() * 0.4), Material = material })
+		local a = math.random() * TAU
+		local r = (4 + math.random() * 8) * S
+		st[i] = {
+			pos = center + Vector3.new(math.cos(a) * r, 0.2 * S, math.sin(a) * r),
+			rise = (1.5 + math.random() * 3) * S,
+			spin = Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5) * 3,
+			rot = CFrame.Angles(math.random() * TAU, math.random() * TAU, 0),
+			vy = 0,
+		}
+	end
+	local g = workspace.Gravity * 0.6
+	addFxNow(life, parts, function(age, u, dt)
+		for i, p in parts do
+			local s = st[i]
+			local d = dt or 0
+			if u < 0.8 then
+				s.pos += Vector3.new(0, s.rise * d * (1 - u), 0)
+			else
+				s.vy -= g * d
+				s.pos += Vector3.new(0, s.vy * d, 0)
+			end
+			s.rot = s.rot * CFrame.Angles(s.spin.X * d, s.spin.Y * d, s.spin.Z * d)
+			p.CFrame = CFrame.new(s.pos) * s.rot
+			p.Transparency = smooth(progress(0.9, 1, u))
+		end
+	end)
+end
+
+-- A thin glowing ripple on the ground (his steps and impacts in the Ultimate Eye form).
+local function ripple(pos: Vector3, r1: number, life: number, color: Color3?)
+	shockRing(CFrame.new(pos + Vector3.new(0, 0.05 * S, 0)), false, 0.3 * S, r1, life, color or C_RED, Enum.Material.Neon, 0.1 * S, 0.06 * S, 22, 0.15)
+end
+
 local function vrLook(): Vector3
 	local l = visualRoot.LookVector
 	local f = Vector3.new(l.X, 0, l.Z)
@@ -5101,13 +5901,13 @@ end
 
 -- Free copies of a prop group (thrown saber, the cape, the eyepatch), moved as one rigid body.
 -- Skinned meshes copied off the rig show their rest shape, placed where the bone has them now.
-local function propCopy(group: string, boneName: string): ({ BasePart }, { CFrame }, CFrame)
+local function propCopy(group: string, boneName: string, includeHidden: boolean?): ({ BasePart }, { CFrame }, CFrame)
 	local parts, offsets = {}, {}
 	local rec = anim.bones[boneName]
 	local origin = boneCF(boneName)
 	local restWorld = hrp.CFrame * (if rec then rec.restRel else I)
 	for _, src in groupParts[group] or {} do
-		if src.LocalTransparencyModifier < 0.99 then
+		if includeHidden or src.LocalTransparencyModifier < 0.99 then
 			local ok, p = pcall(function()
 				return src:Clone()
 			end)
@@ -5284,6 +6084,151 @@ do
 	end
 end
 
+-- The Ultimate Eye form: a smouldering aura and embers on the bones, crackling red lightning, a
+-- burning star on the eye and a second, wider crimson trail on each blade. Built once, switched on
+-- and off with the form.
+local eyeMode = {
+	on = false,
+	emitters = {} :: { ParticleEmitter },
+	outer = {} :: { [number]: Trail },
+	star = nil :: BillboardGui?,
+	nextCrackle = 0,
+}
+do
+	local function emitterOn(parent: Instance?, props)
+		if parent then
+			table.insert(eyeMode.emitters, makeEmitter(parent, props))
+		end
+	end
+	emitterOn(boneObjs.B_Chest, {
+		Texture = TEX_FIRE,
+		Color = CS(Color3.fromRGB(255, 70, 70), C_DARKRED),
+		LightEmission = 0.35,
+		Size = NS(0, 1.6 * S, 1, 0.2 * S),
+		Transparency = NS(0, 0.62, 0.5, 0.78, 1, 1),
+		Lifetime = NR(0.6, 1.0),
+		Speed = NR(0.5 * S, 1.5 * S),
+		SpreadAngle = Vector2.new(180, 180),
+		Acceleration = Vector3.new(0, 9 * S, 0),
+		Rotation = NR(0, 360),
+		RotSpeed = NR(-60, 60),
+		Rate = 16,
+	})
+	emitterOn(boneObjs.B_Hips, {
+		Texture = TEX_SMOKE,
+		Color = CS(Color3.fromRGB(70, 0, 8), C_INK),
+		Size = NS(0, 1.2 * S, 1, 2.6 * S),
+		Transparency = NS(0, 0.75, 1, 1),
+		Lifetime = NR(0.8, 1.4),
+		Speed = NR(0.3 * S, 1 * S),
+		SpreadAngle = Vector2.new(180, 180),
+		Acceleration = Vector3.new(0, 3 * S, 0),
+		Rotation = NR(0, 360),
+		Rate = 7,
+	})
+	for _, h in { "B_HandR", "B_HandL" } do
+		emitterOn(boneObjs[h], {
+			Texture = TEX_SPARK,
+			Color = CS(C_RED, Color3.fromRGB(255, 160, 160)),
+			LightEmission = 1,
+			Size = NS(0, 0.22 * S, 1, 0),
+			Transparency = NS(0, 0, 1, 1),
+			Lifetime = NR(0.3, 0.6),
+			Speed = NR(1 * S, 3 * S),
+			SpreadAngle = Vector2.new(180, 180),
+			Acceleration = Vector3.new(0, 4 * S, 0),
+			Rate = 9,
+		})
+	end
+	local glowBone = boneObjs.B_Head and boneObjs.B_Head:FindFirstChild("BradleyEyeGlow")
+	if glowBone then
+		emitterOn(glowBone, {
+			Texture = TEX_SPARK,
+			Color = CS(C_RED),
+			LightEmission = 1,
+			Size = NS(0, 0.12 * S, 1, 0),
+			Transparency = NS(0, 0, 1, 1),
+			Lifetime = NR(0.25, 0.5),
+			Speed = NR(0.4 * S, 1.2 * S),
+			SpreadAngle = Vector2.new(60, 60),
+			Acceleration = Vector3.new(0, 3 * S, 0),
+			Rate = 12,
+		})
+		local gui = Instance.new("BillboardGui")
+		gui.Name = "BradleyEyeStar"
+		gui.Size = UDim2.fromScale(1.5 * S, 1.5 * S)
+		gui.LightInfluence = 0
+		gui.Adornee = glowBone :: any
+		gui.Enabled = false
+		for i, spec in { { 0, 1, 0.07 }, { 90, 0.55, 0.06 }, { 45, 0.32, 0.05 }, { 135, 0.32, 0.05 } } do
+			local f = Instance.new("Frame")
+			f.AnchorPoint = Vector2.new(0.5, 0.5)
+			f.Position = UDim2.fromScale(0.5, 0.5)
+			f.Size = UDim2.fromScale(spec[2], spec[3])
+			f.Rotation = spec[1]
+			f.BorderSizePixel = 0
+			f.BackgroundColor3 = if i == 1 then Color3.fromRGB(255, 120, 120) else C_RED
+			local grad = Instance.new("UIGradient")
+			grad.Transparency = NS(0, 1, 0.5, 0, 1, 1)
+			grad.Parent = f
+			f.Parent = gui
+		end
+		gui.Parent = glowBone
+		eyeMode.star = gui
+	end
+	-- the wider glow trail on each blade: two extra bones, just inside the guard and past the tip
+	for side, n in { [1] = "R", [-1] = "L" } do
+		local sb, tp = anim.bones["B_Saber" .. n], anim.bones["B_SaberTip" .. n]
+		local sbObj, tpObj = boneObjs["B_Saber" .. n], boneObjs["B_SaberTip" .. n]
+		if sb and tp and sbObj and tpObj then
+			local a, b = sb.restRel.Position, tp.restRel.Position
+			local dir = b - a
+			local function mk(rec, obj: Bone, p: Vector3): Bone
+				local bone = Instance.new("Bone")
+				bone.Name = "BradleyBladeGlow"
+				bone.CFrame = CFrame.new(rec.restRel:PointToObjectSpace(p))
+				bone.Parent = obj
+				return bone
+			end
+			local g0 = mk(sb, sbObj, a + dir * 0.06)
+			local g1 = mk(tp, tpObj, b + dir * 0.2)
+			local tr = Instance.new("Trail")
+			tr.Name = "BradleyBladeGlowTrail"
+			tr.Attachment0 = g0
+			tr.Attachment1 = g1
+			tr.Lifetime = 0.3
+			tr.MinLength = 0.05
+			tr.LightEmission = 1
+			tr.LightInfluence = 0
+			tr.FaceCamera = false
+			tr.Color = CS(0, C_HOT, 0.3, C_RED, 1, C_DARKRED)
+			tr.Transparency = NS(0, 0.4, 0.5, 0.72, 1, 1)
+			tr.WidthScale = NS(0, 1, 1, 0.55)
+			tr.Enabled = false
+			tr.Parent = g0
+			eyeMode.outer[side] = tr
+		end
+	end
+end
+
+local function setEyeMode(on: boolean)
+	if eyeMode.on == on then
+		return
+	end
+	eyeMode.on = on
+	for _, e in eyeMode.emitters do
+		e.Enabled = on
+	end
+	if eyeMode.star then
+		eyeMode.star.Enabled = on
+	end
+	if not on then
+		for _, tr in eyeMode.outer do
+			tr.Enabled = false
+		end
+	end
+end
+
 -- =============================================================================================
 -- 4. Actions: bookkeeping and their effects (the poses are in the Animator)
 -- =============================================================================================
@@ -5305,6 +6250,7 @@ type ActionRec = {
 	path: any,
 	data: any,
 	suppress: number,
+	hilt: Vector3?,
 }
 local actions: { ActionRec } = {}
 local lastActionId: any = nil
@@ -5320,6 +6266,8 @@ local FADE = {
 	Cleave = { 0.1, 0.35 },
 	ThousandCuts = { 0.15, 0.4 },
 	PhantomStep = { 0.15, 0.4 },
+	PiercingGaze = { 0.2, 0.3 },
+	Execution = { 0.06, 0.4 },
 	Death = { 0.15, 0 },
 }
 local SUPPRESS = { Challenge = 0.9, RemoveCape = 0.85, RemoveEyepatch = 0.9 }
@@ -5359,6 +6307,56 @@ local function frontSlash(tilt: number, flip: boolean, radius: number, width: nu
 		a0, a1 = a1, a0
 	end
 	slashArc(cf, radius * S, a0, a1, width * S, color or slashColor(), 0.32, 0.06)
+end
+
+-- A cut in the Ultimate Eye style: black ink edge, crimson body, white-hot core.
+local function eyeFrontSlash(tilt: number, flip: boolean, radius: number, width: number, height: number?)
+	frontSlash(tilt, flip, radius * 1.03, width * 1.6, height, C_INK)
+	frontSlash(tilt, flip, radius, width, height, C_RED)
+	frontSlash(tilt, flip, radius * 0.99, width * 0.32, height, Color3.new(1, 1, 1))
+end
+
+-- Two cuts crossing in the air: they hang for a beat, then burst.
+local function cutMark(center: Vector3, look: Vector3, size: number, hold: number)
+	local right = look:Cross(Vector3.yAxis)
+	right = if right.Magnitude > 1e-3 then right.Unit else Vector3.xAxis
+	local d1 = (right + Vector3.yAxis).Unit * size
+	local d2 = (right - Vector3.yAxis).Unit * size
+	slashLine(center - d1, center + d1, 0.32 * S, C_RED, hold + 0.3, hold)
+	slashLine(center - d2, center + d2, 0.32 * S, C_RED, hold + 0.3, hold)
+	local holder = fxPart({ Size = Vector3.one * 0.1, Transparency = 1, CFrame = CFrame.new(center) })
+	addFx(hold + 0.05, { holder }, function(age)
+		if age >= hold and not holder:GetAttribute("Burst") then
+			holder:SetAttribute("Burst", true)
+			sparks(center, C_RED, 14, 22)
+			impactStar(center, 5, C_RED, 0.25)
+		end
+	end)
+end
+
+-- A red line from one of his bones to the action's target, kept up to date until `life` ends: the
+-- path a throw is about to take.
+local function aimLine(rec: ActionRec, boneName: string, life: number)
+	local glow = fxPart({ Color = C_RED, Material = Enum.Material.Neon, Transparency = 1 })
+	local core = fxPart({ Color = Color3.new(1, 1, 1), Material = Enum.Material.Neon, Transparency = 1 })
+	addFx(life, { glow, core }, function(age, u)
+		local a, b = bonePos(boneName), rec.target
+		if not b then
+			return
+		end
+		local len = (b - a).Magnitude
+		if len < 0.2 then
+			return
+		end
+		local cf = CFrame.lookAt((a + b) / 2, b)
+		local k = smooth(clamp01(age / 0.08)) * (1 - smooth(progress(0.85, 1, u)))
+		glow.Size = Vector3.new(0.16 * S, 0.16 * S, len)
+		glow.CFrame = cf
+		glow.Transparency = 1 - 0.55 * k * (0.75 + 0.25 * math.sin(age * 40))
+		core.Size = Vector3.new(0.04 * S, 0.04 * S, len)
+		core.CFrame = cf
+		core.Transparency = 1 - 0.9 * k
+	end)
 end
 
 FX.Challenge = function(rec, t)
@@ -5489,11 +6487,42 @@ FX.RemoveEyepatch = function(rec, t)
 	if fire(rec, "toss", release, t) then
 		tossPatch()
 	end
+	-- the charge: red light drawn into the closed eye from all around, lightning off the ground
+	if fire(rec, "charge", open - 0.95, t) then
+		motesTo(eyeWorld, visualRoot.Position, 11 * S, 48, 0.92)
+		local g, color = groundAt(visualRoot.Position, 12)
+		dustBurst(g, color, 6, 3, 2.4)
+	end
+	for i, at in { open - 0.78, open - 0.52, open - 0.3, open - 0.14 } do
+		if fire(rec, "arc" .. i, at, t) then
+			local a = math.random() * TAU
+			local g = groundAt(visualRoot.Position + Vector3.new(math.cos(a), 0, math.sin(a)) * (5 + math.random() * 4) * S, 12)
+			local to = bonePos(if i % 2 == 0 then "B_HandR" else "B_Chest")
+			lightning(g, to, C_RED, 0.16, 0.12 * S, 0.22)
+		end
+	end
 	if fire(rec, "open", open, t) then
 		playSound("EyeOpen", 1)
 		playSound("Voice", 1)
 		eyeBurst(rec)
 		auraEmitter((c.Duration or 4) - open + 0.5)
+		local eye = eyeWorld()
+		anamorphic(eye, 34, C_RED, 0.9)
+		local g, color, material = groundAt(visualRoot.Position, 12)
+		ouroSigil(g, 15 * S, 3.6)
+		pillar(g, 42 * S, 2.3 * S, C_RED, 1.0)
+		dome(bonePos("B_Chest"), 1.5 * S, (c.ShockRadius or 26) * S, C_RED, 0.75)
+		risingRocks(g, 14, color, material, 2.8)
+		local chest = bonePos("B_Chest")
+		for i = 1, 8 do
+			local a = (i / 8) * TAU + math.random() * 0.3
+			local out = Vector3.new(math.cos(a), (math.random() - 0.3) * 0.8, math.sin(a)).Unit
+			lightning(chest, chest + out * (7 + math.random() * 5) * S, C_RED, 0.28, 0.16 * S, 0.22)
+		end
+	end
+	if fire(rec, "afterArc", open + 0.6, t) then
+		local chest = bonePos("B_Chest")
+		lightning(chest, groundAt(visualRoot.Position + vrLook() * 6 * S, 12), C_RED, 0.2, 0.12 * S, 0.25)
 	end
 end
 
@@ -5503,19 +6532,35 @@ FX.Lunge = function(rec, t)
 	F.trail[1] = envelope(t, d0 - 0.05, d0, d1 + 0.1, d1 + 0.2)
 	F.trail[-1] = F.trail[1] * 0.5
 	if fire(rec, "gleam", d0 - 0.3, t) then
-		glint(bladeWorld(1, 0.95), 3.2, C_STEEL, 0.3)
+		glint(bladeWorld(1, 0.95), 3.2, if enraged then C_RED else C_STEEL, 0.3)
+		if enraged then
+			glint(eyeWorld(), 6, C_RED, 0.3)
+		end
+	end
+	-- the Ultimate Eye shows the dash line the moment it is decided: exactly its hitbox
+	if enraged and not rec.data.foresight and rec.path and t >= d0 - 0.15 and t < d1 then
+		rec.data.foresight = true
+		local from = visualRoot.Position
+		local goal = rec.path[#rec.path].pos
+		local fill = math.max((d1 - t) / rec.speed, 0.05)
+		telegraphLine(from, goal, (c.HitRadius or 4.5) * 2 * S, fill, fill + 0.3)
 	end
 	if fire(rec, "dash", d0, t) then
 		playSound("Lunge", 1)
 		local g, color = groundAt(visualRoot.Position, 12)
 		dustBurst(g, color, 10, 12, 2.2)
+		if enraged then
+			ripple(g, 8 * S, 0.45)
+			crackMarks(g, 4 * S, color)
+		end
 		rec.data.from = visualRoot.Position
 	end
 	if t >= d0 and t <= d1 + 0.05 and rec.data.from then
 		local n = rec.data.ghosts or 0
-		if t >= d0 + n * 0.06 and n < 4 then
+		local maxGhosts, gap = if enraged then 7 else 4, if enraged then 0.035 else 0.06
+		if t >= d0 + n * gap and n < maxGhosts then
 			rec.data.ghosts = n + 1
-			afterimage(slashColor(), 0.3, 0.55)
+			afterimage(if enraged and n % 2 == 1 then C_INK else slashColor(), 0.3, 0.55)
 		end
 	end
 	if fire(rec, "line", d1, t) and rec.data.from then
@@ -5524,6 +6569,10 @@ FX.Lunge = function(rec, t)
 		slashLine(a, b, 0.35 * S, slashColor(), 0.55, 0.12)
 		local g, color = groundAt(visualRoot.Position, 12)
 		dustBurst(g, color, 8, 9, 2)
+		if enraged then
+			lightning(a, b, C_RED, 0.22, 0.12 * S, 0.05)
+			cutMark((a + b) / 2 + Vector3.new(0, 2.2 * S, 0), flatUnit(b - a), 2.6 * S, 0.22)
+		end
 	end
 end
 
@@ -5531,19 +6580,40 @@ FX.CrossCut = function(rec, t)
 	local h = rec.cfg.Hits
 	F.trail[1] = envelope(t, h[1] - 0.08, h[1] - 0.03, h[1] + 0.06, h[1] + 0.12) + envelope(t, h[3] - 0.08, h[3] - 0.03, h[3] + 0.08, h[3] + 0.14)
 	F.trail[-1] = envelope(t, h[2] - 0.08, h[2] - 0.03, h[2] + 0.06, h[2] + 0.12) + envelope(t, h[3] - 0.08, h[3] - 0.03, h[3] + 0.08, h[3] + 0.14)
+	local c = rec.cfg
+	-- the slashes are drawn at the cut's real reach (Config Range)
+	local R = (c.Range or 10) * 0.92
+	if enraged and fire(rec, "foresight", 0, t) then
+		local origin = visualRoot.Position
+		local look = flatUnit((rec.target or origin + vrLook()) - origin, vrLook())
+		local fill = h[1] / rec.speed
+		telegraphSector(origin + look * (c.Step or 1.6) * S, look, (c.Range or 10) * S, c.Arc or 80, fill, fill + 0.25)
+	end
+	local function cut(tilt: number, flip: boolean, radius: number, width: number)
+		if enraged then
+			eyeFrontSlash(tilt, flip, radius, width)
+		else
+			frontSlash(tilt, flip, radius, width)
+		end
+	end
 	if fire(rec, "h1", h[1], t) then
 		playSound("Slash", 1, 1.05)
-		frontSlash(-40, false, 5.5, 0.55)
+		cut(-40, false, R, 0.55)
 	end
 	if fire(rec, "h2", h[2], t) then
 		playSound("Slash", 1, 0.95)
-		frontSlash(40, true, 5.5, 0.55)
+		cut(40, true, R, 0.55)
 	end
 	if fire(rec, "h3", h[3], t) then
 		playSound("Slash", 1.2, 0.85)
-		frontSlash(-48, false, 6.5, 0.7)
-		frontSlash(48, true, 6.5, 0.7)
-		sparks(visualRoot.Position + vrLook() * 4 * S, C_STEEL, 10, 16)
+		cut(-48, false, R * 1.05, 0.7)
+		cut(48, true, R * 1.05, 0.7)
+		if enraged then
+			cutMark(visualRoot.Position + vrLook() * 4.5 * S + Vector3.new(0, 1.2 * S, 0), vrLook(), 3.4 * S, 0.3)
+			sparks(visualRoot.Position + vrLook() * 4 * S, C_RED, 14, 20)
+		else
+			sparks(visualRoot.Position + vrLook() * 4 * S, C_STEEL, 10, 16)
+		end
 		addShake(0.25, visualRoot.Position, 15, 60)
 	end
 end
@@ -5597,6 +6667,11 @@ local function throwSaber(rec: ActionRec)
 				dustBurst(g, color, 8, 8, 1.8)
 				debrisBurst(g, 6, color, material, 14 * S)
 				shockRing(CFrame.new(g + Vector3.new(0, 0.1 * S, 0)), false, 0.5 * S, 6 * S, 0.35, Color3.new(1, 1, 1), Enum.Material.Neon, 0.15 * S, 0.2 * S, 18, 0.2)
+				if enraged then
+					ripple(g, 7 * S, 0.5)
+					impactStar(impact, 6, C_RED, 0.25)
+					lightning(impact, impact + Vector3.new(math.random() - 0.5, 0.9, math.random() - 0.5).Unit * 4 * S, C_RED, 0.18, 0.1 * S)
+				end
 				playSound("Impact", 0.6, 1.4)
 			end
 			placeCopy(parts, offsets, CFrame.lookAt(stuck, stuck + dir) * align, smooth(progress(life - 1.2, life, age)))
@@ -5612,6 +6687,12 @@ FX.SaberThrow = function(rec, t)
 	local grabAt = (r0 + r1) / 2
 	F.vis.SaberL = t < rl or t >= grabAt
 	F.trail[-1] = envelope(t, rl - 0.12, rl - 0.06, rl, rl + 0.02)
+	-- the eye shows where the blade will fly (the impact point is published just before the release)
+	if enraged and not rec.data.aim and t >= rl - 0.16 and t < rl then
+		rec.data.aim = true
+		aimLine(rec, "B_HandL", (rl - t) / rec.speed + 0.06)
+		glint(bladeWorld(-1, 0.95), 3.5, C_RED, 0.25)
+	end
 	if fire(rec, "release", rl, t) then
 		playSound("Throw", 1, 1.1)
 		throwSaber(rec)
@@ -5685,6 +6766,24 @@ FX.Cleave = function(rec, t)
 		dustBurst(g, color, 10, 10, 2)
 		shockRing(CFrame.new(g + Vector3.new(0, 0.1 * S, 0)), false, 1 * S, 7 * S, 0.4, color, Enum.Material.SmoothPlastic, 0.4 * S, 0.5 * S, 18, 0.3)
 	end
+	-- the eye shows the landing and the fissure as soon as the leap is decided: exactly the hitboxes
+	if enraged and not rec.data.tele and rec.path and rec.target and t >= l0 - 0.12 and t < imp then
+		rec.data.tele = true
+		local fill = math.max((imp - t) / rec.speed, 0.05)
+		local impactPt = rec.target
+		telegraphCircle(impactPt, (c.Radius or 10) * S, fill, fill + 0.3)
+		local dir = flatUnit(impactPt - visualRoot.Position, vrLook())
+		telegraphLine(impactPt, impactPt + dir * (c.FissureLength or 30) * S, (c.FissureWidth or 6) * S, fill, fill + 0.3)
+	end
+	if enraged and fire(rec, "impactEye", imp, t) then
+		local g = groundAt(rec.target or (visualRoot.Position + vrLook() * 3 * S), 14)
+		pillar(g, 28 * S, 1.7 * S, C_RED, 0.7)
+		ouroSigil(g, (c.Radius or 10) * 0.9 * S, 1.9)
+		for i = 1, 5 do
+			local a = (i / 5) * TAU + math.random() * 0.5
+			lightning(g + Vector3.new(0, 0.3 * S, 0), g + Vector3.new(math.cos(a) * 7 * S, (0.5 + math.random()) * S, math.sin(a) * 7 * S), C_RED, 0.22, 0.12 * S, 0.25)
+		end
+	end
 	if fire(rec, "impact", imp, t) then
 		playSound("Impact", 1.2)
 		playSound("Slash", 1, 0.7)
@@ -5754,6 +6853,9 @@ local function crossWave(rec: ActionRec)
 			lastCrack = len * u
 			local g = Vector3.new(center.X, gY, center.Z)
 			dustBurst(g, color, 4, 8, 2)
+			if enraged then
+				lightning(g + Vector3.new(0, 0.2 * S, 0), center + Vector3.new(0, width * 0.3, 0), C_RED, 0.16, 0.1 * S, 0.3)
+			end
 			local seg = fxPart({ Size = Vector3.new(width * 0.3, 0.06 * S, 5.5 * S), Color = color:Lerp(Color3.new(0, 0, 0), 0.8), CFrame = CFrame.lookAt(g + Vector3.new(0, 0.03 * S, 0), g + dir + Vector3.new(0, 0.03 * S, 0)) })
 			addFx(5, { seg }, function(a2)
 				seg.Transparency = smooth(progress(4, 5, a2))
@@ -5769,28 +6871,47 @@ FX.ThousandCuts = function(rec, t)
 	local flurry = envelope(t, f0 - 0.05, f0, f1, f1 + 0.05)
 	F.trail[1] = math.max(flurry, envelope(t, c.FinalAt - 0.08, c.FinalAt - 0.03, c.FinalAt + 0.06, c.FinalAt + 0.12))
 	F.trail[-1] = F.trail[1]
+	local range = c.Range or 10
 	if fire(rec, "focus", 0.12, t) then
-		glint(eyeWorld(), 7, C_RED, 0.5)
+		local eye = eyeWorld()
+		glint(eye, 7, C_RED, 0.5)
+		anamorphic(eye, 16, C_RED, 0.45)
 		playSound("EyeOpen", 0.6, 1.3)
+		-- the cone the flurry will sweep (its reach plus the ground he covers)
+		local origin = visualRoot.Position
+		local look = flatUnit((rec.target or origin + vrLook()) - origin, vrLook())
+		local fill = math.max((f0 - t) / rec.speed, 0.1)
+		telegraphSector(origin, look, (range + (c.Advance or 9)) * S, c.Arc or 85, fill, fill + (f1 - f0) / rec.speed)
 	end
 	for i = 1, n do
 		local at = f0 + (f1 - f0) * (i - 0.5) / n
 		if fire(rec, "s" .. i, at, t) then
 			playSound("Slash", 0.7, 0.9 + math.random() * 0.4)
-			frontSlash(math.random(-70, 70), i % 2 == 0, 4 + math.random() * 3, 0.5, 0.4 + math.random() * 1.6)
+			eyeFrontSlash(math.random(-70, 70), i % 2 == 0, range * (0.7 + math.random() * 0.3), 0.45, 0.4 + math.random() * 1.6)
+			-- cuts too fast to see: thin lines appear in the air all over the cone
+			for _ = 1, 2 do
+				local dirv = CFrame.Angles(0, math.rad(math.random(-60, 60)), 0):VectorToWorldSpace(vrLook())
+				local center = visualRoot.Position + dirv * (2 + math.random() * (range - 2)) * S + Vector3.new(0, (math.random() * 2.5 - 0.5) * S, 0)
+				local cutv = Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5)
+				if cutv.Magnitude > 1e-3 then
+					cutv = cutv.Unit * (1 + math.random() * 1.5) * S
+					slashLine(center - cutv, center + cutv, 0.1 * S, C_RED, 0.32, 0.12)
+				end
+			end
 			if i % 2 == 0 then
-				afterimage(slashColor(), 0.25, 0.6)
+				afterimage(if i % 4 == 0 then C_INK else slashColor(), 0.25, 0.6)
 			end
 			if i % 3 == 0 then
-				sparks(visualRoot.Position + vrLook() * 4 * S + Vector3.new(0, 1 * S, 0), C_STEEL, 6, 14)
+				sparks(visualRoot.Position + vrLook() * 4 * S + Vector3.new(0, 1 * S, 0), C_RED, 8, 16)
 			end
 		end
 	end
 	if fire(rec, "final", c.FinalAt, t) then
 		playSound("Wave", 1)
 		playSound("Slash", 1.2, 0.7)
-		frontSlash(-45, false, 7, 1.0, 0.8)
-		frontSlash(45, true, 7, 1.0, 0.8)
+		eyeFrontSlash(-45, false, range * 0.9, 1.0, 0.8)
+		eyeFrontSlash(45, true, range * 0.9, 1.0, 0.8)
+		cutMark(visualRoot.Position + vrLook() * 3.5 * S + Vector3.new(0, 1.4 * S, 0), vrLook(), 4 * S, 0.2)
 		crossWave(rec)
 		addShake(0.9, visualRoot.Position, 20, 100)
 	end
@@ -5873,9 +6994,16 @@ FX.PhantomStep = function(rec, t)
 			end
 		end
 	end
+	if fire(rec, "circle", s1, t) then
+		local g = groundAt(rec.target or visualRoot.Position, 14)
+		ouroSigil(g, (c.Radius or 13) * 1.08 * S, (c.DetonateAt - s1) / rec.speed + 0.7)
+	end
 	if fire(rec, "detonate", c.DetonateAt, t) then
 		playSound("Detonate", 1.2)
 		playSound("Slash", 1.2, 0.6)
+		local gc = groundAt(rec.target or visualRoot.Position, 14)
+		pillar(gc, 30 * S, 2 * S, C_RED, 0.7)
+		dome(gc + Vector3.new(0, 1.5 * S, 0), 1 * S, (c.CoreRadius or 7) * 1.6 * S, C_RED, 0.5)
 		for _, l in rec.data.lines do
 			local mid = (l[1] + l[2]) / 2
 			slashLine(l[1], l[2], 1.2 * S, Color3.new(1, 1, 1), 0.25, 0)
@@ -5889,6 +7017,336 @@ FX.PhantomStep = function(rec, t)
 		dustBurst(g, color, 14, 12, 2.6)
 		crackMarks(g, 8 * S, color)
 		addShake(1.0, g, 20, 100)
+	end
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Ultimate Eye: Piercing Gaze and the Execution
+-- ---------------------------------------------------------------------------------------------
+-- The javelin throw of the Piercing Gaze. One flying copy of the left saber, shared with the
+-- Execution (which drives it into the victim's chest and takes it back at the grab).
+local gaze = { parts = nil :: { BasePart }?, offsets = nil :: { CFrame }?, align = I, bladeLen = 1, start = V0, dir = Vector3.new(0, 0, -1), impact = V0, speed = 100, landed = false, stuckIn = nil :: BasePart?, done = false, born = 0 }
+
+local function gazeBlade(rec: ActionRec?, includeHidden: boolean?)
+	local parts, offsets, origin = propCopy("SaberL", "B_SaberL", includeHidden)
+	if #parts == 0 then
+		return false
+	end
+	local bladeLocal = (anim.bones.B_SaberTipL and anim.bones.B_SaberL) and (anim.bones.B_SaberL.restRel:Inverse() * anim.bones.B_SaberTipL.restRel).Position or Vector3.new(0, -1, 0)
+	gaze.parts, gaze.offsets = parts, offsets
+	gaze.align = CFrame.lookAt(V0, bladeLocal):Inverse()
+	gaze.bladeLen = bladeLocal.Magnitude
+	gaze.start = origin.Position
+	gaze.impact = if rec and rec.target then rec.target else origin.Position + vrLook() * 60 * S
+	local d = gaze.impact - gaze.start
+	gaze.dir = if d.Magnitude > 0.5 then d.Unit else vrLook()
+	gaze.speed = ((rec and rec.cfg.Speed) or 240) * S
+	gaze.landed = false
+	gaze.stuckIn = nil
+	gaze.done = false
+	gaze.born = os.clock()
+	local streak = fxPart({ Color = C_RED, Material = Enum.Material.Neon, Transparency = 1 })
+	local streakCore = fxPart({ Color = Color3.new(1, 1, 1), Material = Enum.Material.Neon, Transparency = 1 })
+	local all = { streak, streakCore }
+	for _, p in parts do
+		table.insert(all, p)
+	end
+	local myParts = parts
+	local life = 9
+	addFx(life, all, function(age)
+		if gaze.parts ~= myParts or gaze.done then
+			-- taken back by his hand (or replaced): gone
+			for _, p in all do
+				p.Transparency = 1
+			end
+			return
+		end
+		local dir = gaze.dir
+		local tipAt
+		local stuckIn = gaze.stuckIn
+		if stuckIn and stuckIn.Parent then
+			-- through the chest: the hilt stands out in front, the point out of the back
+			local chest = stuckIn.Position + Vector3.new(0, 0.75, 0)
+			local hilt = chest - dir * (gaze.bladeLen * 0.35)
+			placeCopy(myParts, gaze.offsets :: { CFrame }, CFrame.lookAt(hilt, hilt + dir) * gaze.align)
+			tipAt = hilt
+		elseif not gaze.landed then
+			local total = (gaze.impact - gaze.start).Magnitude / gaze.speed
+			local u = clamp01(age / math.max(total, 1e-3))
+			local hilt = gaze.start:Lerp(gaze.impact - dir * (gaze.bladeLen * 0.85), u)
+			placeCopy(myParts, gaze.offsets :: { CFrame }, CFrame.lookAt(hilt, hilt + dir) * gaze.align)
+			tipAt = hilt + dir * gaze.bladeLen
+			if u >= 1 then
+				gaze.landed = true
+				local g, color, material = groundAt(gaze.impact, 6)
+				sparks(gaze.impact, C_RED, 14, 20)
+				impactStar(gaze.impact, 6, C_RED, 0.25)
+				dustBurst(g, color, 8, 8, 1.8)
+				debrisBurst(g, 6, color, material, 14 * S)
+				ripple(g, 7 * S, 0.5)
+				lightning(gaze.impact, gaze.impact + Vector3.new(math.random() - 0.5, 0.8, math.random() - 0.5).Unit * 4 * S, C_RED, 0.18, 0.1 * S)
+				playSound("Impact", 0.7, 1.3)
+			end
+		else
+			local hilt = gaze.impact - dir * (gaze.bladeLen * 0.85)
+			placeCopy(myParts, gaze.offsets :: { CFrame }, CFrame.lookAt(hilt, hilt + dir) * gaze.align, smooth(progress(life - 1.2, life, age)))
+		end
+		-- the crimson streak it leaves through the air
+		local a = gaze.start
+		local b = tipAt or a
+		local len = (b - a).Magnitude
+		local fade = smooth(progress(0.05, 0.5, age))
+		if len > 0.1 then
+			local cf = CFrame.lookAt((a + b) / 2, b)
+			streak.Size = Vector3.new(0.3 * S, 0.3 * S, len)
+			streak.CFrame = cf
+			streak.Transparency = 0.25 + 0.75 * fade
+			streakCore.Size = Vector3.new(0.09 * S, 0.09 * S, len)
+			streakCore.CFrame = cf
+			streakCore.Transparency = fade
+		end
+	end)
+	return true
+end
+
+-- The eye's sight line on the target (and a reticle on them), then the aim line from his hand that
+-- locks white: the throw flies exactly down that line.
+local function sightLines(rec: ActionRec)
+	local c = rec.cfg
+	local lock, rl = c.LockAt, c.ReleaseAt
+	local sight = fxPart({ Color = C_RED, Material = Enum.Material.Neon, Transparency = 1 })
+	local aimGlow = fxPart({ Color = C_RED, Material = Enum.Material.Neon, Transparency = 1 })
+	local aimCore = fxPart({ Color = Color3.new(1, 1, 1), Material = Enum.Material.Neon, Transparency = 1 })
+	local holder = fxPart({ Size = Vector3.one * 0.1, Transparency = 1 })
+	local gui = Instance.new("BillboardGui")
+	gui.Size = UDim2.fromScale(3, 3)
+	gui.LightInfluence = 0
+	gui.AlwaysOnTop = true
+	gui.Adornee = holder
+	gui.Parent = holder
+	local ring = Instance.new("Frame")
+	ring.AnchorPoint = Vector2.new(0.5, 0.5)
+	ring.Position = UDim2.fromScale(0.5, 0.5)
+	ring.BackgroundTransparency = 1
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0.5, 0)
+	corner.Parent = ring
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = C_RED
+	stroke.Thickness = 2
+	stroke.Parent = ring
+	ring.Parent = gui
+	local ticks = {}
+	for i = 1, 4 do
+		local f = Instance.new("Frame")
+		f.AnchorPoint = Vector2.new(0.5, 0.5)
+		f.BorderSizePixel = 0
+		f.BackgroundColor3 = C_RED
+		f.Parent = gui
+		ticks[i] = f
+	end
+	local lockPoint: Vector3? = nil
+	local function seg(p: BasePart, a: Vector3, b: Vector3, w: number, tr: number)
+		local len = (b - a).Magnitude
+		if len < 0.1 then
+			p.Transparency = 1
+			return
+		end
+		p.Size = Vector3.new(w, w, len)
+		p.CFrame = CFrame.lookAt((a + b) / 2, b)
+		p.Transparency = tr
+	end
+	local life = math.max((rl - rec.t) / rec.speed, 0) + 0.06
+	addFx(life, { sight, aimGlow, aimCore, holder }, function(age)
+		local t = rec.t
+		local target = rec.target
+		if not target then
+			return
+		end
+		if t < lock then
+			lockPoint = target
+		end
+		local point = lockPoint or target
+		-- reticle on the target: closes in until the lock, white at the lock
+		local closeIn = progress(c.Gaze[1], lock, t)
+		local locked = t >= lock
+		holder.CFrame = CFrame.new(point)
+		local sz = 1 - 0.55 * closeIn
+		ring.Size = UDim2.fromScale(sz, sz)
+		ring.Rotation = age * 120
+		stroke.Color = if locked then Color3.new(1, 1, 1) else C_RED
+		stroke.Transparency = 0.1
+		for i, f in ticks do
+			local a = (i - 1) * 90 + age * 120
+			local r = sz * 0.5 + 0.1
+			f.Size = UDim2.fromScale(0.16, 0.04)
+			f.Rotation = a
+			f.Position = UDim2.fromScale(0.5 + math.cos(math.rad(a)) * r, 0.5 + math.sin(math.rad(a)) * r)
+			f.BackgroundColor3 = stroke.Color
+		end
+		-- the eye's line until the wind-up, the hand's line after
+		local eye = eyeWorld()
+		local pulse = 0.5 + 0.5 * math.sin(age * 18)
+		seg(sight, eye, point, 0.05 * S, if t < lock - 0.5 then 0.35 + 0.3 * pulse else 1)
+		local hand = bonePos("B_HandL")
+		local aimEnd = if locked then target else point
+		local aimOn = progress(lock - 0.6, lock - 0.3, t)
+		local flash = envelope(t, lock - 0.01, lock, lock + 0.04, lock + 0.16)
+		seg(aimGlow, hand, aimEnd, (0.12 + 0.12 * flash + (if locked then 0.06 else 0)) * S, 1 - aimOn * (if locked then 0.75 else 0.45 + 0.2 * pulse))
+		seg(aimCore, hand, aimEnd, 0.035 * S, 1 - aimOn * (if locked then 1 else 0.35))
+		aimCore.Color = if locked then Color3.new(1, 1, 1) else Color3.fromRGB(255, 160, 160)
+	end)
+end
+
+FX.PiercingGaze = function(rec, t)
+	local c = rec.cfg
+	local g0 = c.Gaze[1]
+	local lock, rl = c.LockAt, c.ReleaseAt
+	local rd = c.Redraw or { rl + 0.65, rl + 1.15 }
+	F.vis.SaberL = t < rl or t >= (rd[1] + rd[2]) / 2
+	F.trail[-1] = envelope(t, rl - 0.12, rl - 0.06, rl, rl + 0.02)
+	if fire(rec, "gaze", g0, t) then
+		local eye = eyeWorld()
+		glint(eye, 10, C_RED, 0.7)
+		anamorphic(eye, 22, C_RED, 0.6)
+		playSound("EyeOpen", 1, 0.85)
+		sightLines(rec)
+	end
+	if fire(rec, "flare", g0 + 0.6, t) then
+		glint(eyeWorld(), 7, C_RED, 0.4)
+	end
+	if fire(rec, "lock", lock, t) then
+		local tip = bladeWorld(-1, 0.95)
+		glint(tip, 4.5, Color3.new(1, 1, 1), 0.3)
+		anamorphic(tip, 12, Color3.new(1, 1, 1), 0.25)
+		playSound("Unsheathe", 0.8, 1.4)
+	end
+	if fire(rec, "release", rl, t) then
+		playSound("Throw", 1.2, 1.0)
+		gazeBlade(rec)
+		local hand = bonePos("B_HandL")
+		local dir = gaze.dir
+		shockRing(CFrame.lookAt(hand, hand + dir), true, 0.3 * S, 5.5 * S, 0.35, C_RED, Enum.Material.Neon, 0.12 * S, 0.12 * S, 20, 0)
+		shockRing(CFrame.lookAt(hand + dir * 3 * S, hand + dir * 4 * S), true, 0.2 * S, 3.5 * S, 0.3, Color3.new(1, 1, 1), Enum.Material.Neon, 0.08 * S, 0.08 * S, 18, 0)
+		addShake(0.45, hand, 15, 80)
+	end
+	if fire(rec, "grab", (rd[1] + rd[2]) / 2, t) and #spareNames > 0 then
+		spareHidden[spareNames[1]] = os.clock() + 9
+		playSound("Unsheathe", 0.7, 1.15)
+	end
+end
+
+FX.Execution = function(rec, t)
+	local c = rec.cfg
+	local d0, d1, grab, kick = c.DashStart, c.DashEnd, c.GrabAt, c.KickAt
+	F.vis.SaberL = t >= grab
+	local root = victimRoot(rec)
+	local chest = if root then root.Position + Vector3.new(0, 0.75, 0) else nil
+	if fire(rec, "impaled", 0, t) then
+		-- the blade is in them: the flying copy (or a fresh one, for late joiners) sticks in the chest
+		if not gaze.parts or gaze.done or os.clock() - gaze.born > 6 then
+			gazeBlade(nil, true)
+		end
+		if root then
+			gaze.stuckIn = root
+			if chest then
+				local d = flatUnit(chest - visualRoot.Position, vrLook())
+				gaze.dir = (d + Vector3.new(0, -0.08, 0)).Unit
+			end
+		end
+		if chest then
+			impactStar(chest, 9, C_RED, 0.4)
+			anamorphic(chest, 14, C_RED, 0.3)
+			sparks(chest, C_RED, 20, 24)
+		end
+		playSound("Impact", 1, 1.2)
+	end
+	if fire(rec, "eye", d0 - 0.3, t) then
+		local eye = eyeWorld()
+		glint(eye, 9, C_RED, 0.45)
+		anamorphic(eye, 16, C_RED, 0.35)
+	end
+	if fire(rec, "dash", d0, t) then
+		playSound("Lunge", 1.2, 0.85)
+		local g, color, material = groundAt(visualRoot.Position, 12)
+		dustBurst(g, color, 14, 14, 2.6)
+		debrisBurst(g, 6, color, material, 14 * S)
+		crackMarks(g, 5 * S, color)
+		ripple(g, 9 * S, 0.5)
+		local dir = flatUnit((chest or visualRoot.Position + vrLook()) - visualRoot.Position, vrLook())
+		local at = bonePos("B_Chest")
+		shockRing(CFrame.lookAt(at, at + dir), true, 0.5 * S, 7 * S, 0.35, C_RED, Enum.Material.Neon, 0.15 * S, 0.15 * S, 22, 0)
+		rec.data.from = visualRoot.Position
+	end
+	if t >= d0 and t <= d1 + 0.02 then
+		local n = rec.data.ghosts or 0
+		if t >= d0 + n * 0.035 and n < 12 then
+			rec.data.ghosts = n + 1
+			afterimage(if n % 2 == 0 then C_RED else C_INK, 0.32, 0.45)
+		end
+	end
+	if fire(rec, "arrive", d1, t) and rec.data.from then
+		local a = rec.data.from + Vector3.new(0, 0.4 * S, 0)
+		local b = visualRoot.Position + Vector3.new(0, 0.4 * S, 0)
+		slashLine(a, b, 0.4 * S, C_RED, 0.6, 0.1)
+		lightning(a, b, C_RED, 0.25, 0.14 * S, 0.06)
+		local g, color = groundAt(visualRoot.Position, 12)
+		dustBurst(g, color, 10, 10, 2.2)
+	end
+	if fire(rec, "grab", grab, t) then
+		gaze.done = true -- his hand has the hilt: the real blade shows from here
+		local hand = bonePos("B_HandL")
+		glint(hand, 4, C_RED, 0.25)
+		sparks(hand, C_RED, 8, 12)
+		playSound("Unsheathe", 0.9, 0.9)
+	end
+	if fire(rec, "kick", kick, t) then
+		playSound("Impact", 1.4, 0.85)
+		playSound("Slash", 1.2, 0.75)
+		local at = chest or (visualRoot.Position + vrLook() * 3 * S)
+		local kd = flatUnit(at - visualRoot.Position, vrLook())
+		impactStar(at, 16, C_RED, 0.45)
+		anamorphic(at, 26, Color3.new(1, 1, 1), 0.3)
+		shockRing(CFrame.lookAt(at, at + kd), true, 0.5 * S, 11 * S, 0.45, Color3.new(1, 1, 1), Enum.Material.Neon, 0.2 * S, 0.2 * S, 26, 0)
+		shockRing(CFrame.lookAt(at, at + kd), true, 0.3 * S, 7 * S, 0.5, C_RED, Enum.Material.Neon, 0.3 * S, 0.3 * S, 24, 0.05)
+		sparks(at, C_RED, 26, 30)
+		for i = 1, 6 do
+			local a = (i / 6) * TAU
+			local out = (kd + Vector3.new(math.cos(a), math.sin(a), 0) * 0.8).Unit
+			lightning(at, at + out * (4 + math.random() * 3) * S, C_RED, 0.2, 0.1 * S, 0.25)
+		end
+		-- the blade torn out of them: a crescent from his hand
+		local hand = bonePos("B_HandL")
+		slashArc(CFrame.lookAt(hand, hand + kd) * CFrame.Angles(0, math.pi / 2, 0), 3.4 * S, -1.6, 1.0, 0.6 * S, C_RED, 0.3, 0.05)
+		if root then
+			local g, color, material = groundAt(root.Position, 8)
+			debrisBurst(g, 8, color, material, 18 * S)
+			-- a crimson trail behind the victim's flight (local to every client)
+			local a0 = Instance.new("Attachment")
+			a0.Position = Vector3.new(0, 0.9, 0)
+			a0.Parent = root
+			local a1 = Instance.new("Attachment")
+			a1.Position = Vector3.new(0, -0.9, 0)
+			a1.Parent = root
+			local tr = Instance.new("Trail")
+			tr.Attachment0 = a0
+			tr.Attachment1 = a1
+			tr.Lifetime = 0.35
+			tr.LightEmission = 1
+			tr.LightInfluence = 0
+			tr.Color = CS(0, Color3.new(1, 1, 1), 0.3, C_RED, 1, C_DARKRED)
+			tr.Transparency = NS(0, 0.2, 1, 1)
+			tr.Parent = root
+			Debris:AddItem(a0, 1.6)
+			Debris:AddItem(a1, 1.6)
+			Debris:AddItem(tr, 1.6)
+		end
+		addShake(1.3, at, 20, 110)
+		anim:impact(2)
+	end
+	if fire(rec, "chiburi", c.Duration - 0.55, t) then
+		local tip = bladeWorld(-1, 0.9)
+		slashArc(CFrame.lookAt(tip, tip + Vector3.new(0, -1, 0)) * CFrame.Angles(0, math.pi / 2, 0), 2.2 * S, -1.2, 1.2, 0.3 * S, C_RED, 0.25, 0.05)
 	end
 end
 
@@ -5946,7 +7404,7 @@ local function localCharacter(): (Model?, Humanoid?, BasePart?)
 	return char, hum, root
 end
 
-local screen = { impact = 0, effect = nil :: ColorCorrectionEffect?, lines = nil :: ScreenGui?, linesOn = 0 }
+local screen = { impact = 0, effect = nil :: ColorCorrectionEffect?, lines = nil :: ScreenGui?, linesOn = 0, lastHum = nil :: Humanoid?, lastHp = 0 }
 
 local function knockFrom(center: Vector3, radius: number, power: number)
 	local _c, hum, root = localCharacter()
@@ -5965,6 +7423,306 @@ local function knockFrom(center: Vector3, radius: number, power: number)
 	end)
 	root.AssemblyLinearVelocity = dir * (power * f) + Vector3.new(0, 28 + 20 * f, 0)
 	screen.impact = math.max(screen.impact, 0.7 * f)
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Cutscenes: the close-up on his eye (everyone near) and the Execution (its victim only).
+-- The camera is taken (Scriptable) only while a shot plays and is always given back.
+-- ---------------------------------------------------------------------------------------------
+local cine = {
+	kind = nil :: string?,
+	rec = nil :: ActionRec?,
+	prevType = nil :: Enum.CameraType?,
+	prevFov = 70,
+	fromCF = I,
+	bars = 0,
+	flash = 0,
+	flashColor = Color3.new(1, 1, 1),
+	gui = nil :: ScreenGui?,
+	hud = nil :: ScreenGui?,
+	kickDir = Vector3.new(0, 0, -1),
+	side = Vector3.new(1, 0, 0),
+}
+
+-- the victim's own character, frozen on the blade until the kick
+local pin = { active = false, root = nil :: BasePart?, hum = nil :: Humanoid?, deadline = 0, tumble = 0 }
+
+local function pinSelf(maxTime: number)
+	local _c, hum, root = localCharacter()
+	if pin.active or not root then
+		return
+	end
+	pin.active = true
+	pin.root = root
+	pin.hum = hum
+	pin.deadline = os.clock() + maxTime
+	root.AssemblyLinearVelocity = V0
+	root.AssemblyAngularVelocity = V0
+	root.Anchored = true
+end
+
+local function releaseSelf(launch: Vector3?, spin: Vector3?)
+	if not pin.active then
+		return
+	end
+	pin.active = false
+	local root, hum = pin.root, pin.hum
+	if root and root.Parent then
+		root.Anchored = false
+		if launch then
+			root.AssemblyLinearVelocity = launch
+			root.AssemblyAngularVelocity = spin or V0
+			if hum and hum.Health > 0 then
+				hum.PlatformStand = true -- tumbles through the air
+				pin.tumble = os.clock() + 0.95
+			end
+		end
+	end
+end
+
+local function stepPin()
+	local clock = os.clock()
+	if pin.active and clock > pin.deadline then
+		releaseSelf(nil)
+	end
+	if pin.tumble > 0 and clock > pin.tumble then
+		pin.tumble = 0
+		local hum = pin.hum
+		if hum and hum.Parent then
+			hum.PlatformStand = false
+			pcall(function()
+				hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+			end)
+		end
+	end
+end
+
+local function cineGui(): ScreenGui?
+	if cine.gui and cine.gui.Parent then
+		return cine.gui
+	end
+	local pg = localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui")
+	if not pg then
+		return nil
+	end
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "BradleyCutscene"
+	gui.IgnoreGuiInset = true
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 30
+	for _, spec in { { "Top", 0, 0 }, { "Bottom", 1, 1 } } do
+		local f = Instance.new("Frame")
+		f.Name = spec[1]
+		f.AnchorPoint = Vector2.new(0, spec[2])
+		f.Position = UDim2.fromScale(0, spec[3])
+		f.Size = UDim2.fromScale(1, 0)
+		f.BackgroundColor3 = Color3.new(0, 0, 0)
+		f.BorderSizePixel = 0
+		f.Parent = gui
+	end
+	-- crimson edges while the eye is on you
+	for _, spec in { { "Left", 0, 0, 0 }, { "Right", 1, 1, 180 } } do
+		local f = Instance.new("Frame")
+		f.Name = spec[1]
+		f.AnchorPoint = Vector2.new(spec[2], 0)
+		f.Position = UDim2.fromScale(spec[3], 0)
+		f.Size = UDim2.fromScale(0.22, 1)
+		f.BackgroundColor3 = Color3.fromRGB(120, 0, 12)
+		f.BackgroundTransparency = 1
+		f.BorderSizePixel = 0
+		local grad = Instance.new("UIGradient")
+		grad.Transparency = NS(0, 0, 1, 1)
+		grad.Rotation = spec[4]
+		grad.Parent = f
+		f.Parent = gui
+	end
+	local flash = Instance.new("Frame")
+	flash.Name = "Flash"
+	flash.Size = UDim2.fromScale(1, 1)
+	flash.BackgroundTransparency = 1
+	flash.BorderSizePixel = 0
+	flash.ZIndex = 5
+	flash.Parent = gui
+	gui.Parent = pg
+	cine.gui = gui
+	return gui
+end
+
+local function cineFlash(color: Color3, amount: number)
+	cine.flashColor = color
+	cine.flash = math.max(cine.flash, amount)
+end
+
+local function cineBegin(kind: string, rec: ActionRec)
+	local cam = workspace.CurrentCamera
+	if not cam then
+		return
+	end
+	if not cine.kind then
+		cine.prevType = cam.CameraType
+		cine.prevFov = cam.FieldOfView
+		cine.fromCF = cam.CFrame
+		local pg = localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui")
+		local hud = pg and pg:FindFirstChild("BradleyBossBars")
+		if hud and hud:IsA("ScreenGui") then
+			cine.hud = hud
+			hud.Enabled = false
+		end
+	end
+	cine.kind = kind
+	cine.rec = rec
+	if kind == "execution" then
+		local _c, _h, root = localCharacter()
+		local kd = flatUnit((if root then root.Position else visualRoot.Position + vrLook()) - visualRoot.Position, vrLook())
+		cine.kickDir = kd
+		cine.side = Vector3.new(-kd.Z, 0, kd.X)
+	end
+	cam.CameraType = Enum.CameraType.Scriptable
+	cineGui()
+end
+
+local function cineEnd()
+	if not cine.kind then
+		return
+	end
+	cine.kind = nil
+	cine.rec = nil
+	local cam = workspace.CurrentCamera
+	if cam then
+		cam.CameraType = cine.prevType or Enum.CameraType.Custom
+		cam.FieldOfView = cine.prevFov
+		local _c, hum = localCharacter()
+		if hum then
+			cam.CameraSubject = hum
+		end
+	end
+	if cine.hud and cine.hud.Parent then
+		cine.hud.Enabled = true
+	end
+	cine.hud = nil
+	cineFlash(Color3.fromRGB(255, 235, 235), 0.55) -- hides the cut back to the player's camera
+end
+
+-- The shot for this instant: camera CFrame and field of view (nil = the cutscene is over).
+local function cineShot(now: number): (CFrame?, number?)
+	local rec = cine.rec
+	if not rec or not rec.cfg then
+		return nil, nil
+	end
+	local c = rec.cfg
+	local t = (now - rec.start) * rec.speed
+	if cine.kind == "gaze" then
+		local g0, g1 = c.Gaze[1], c.Gaze[2]
+		if t >= g1 or rec.endAt then
+			return nil, nil
+		end
+		local eye = eyeWorld()
+		local tgt = rec.target or (eye + vrLook() * 10)
+		local look = tgt - eye
+		look = if look.Magnitude > 0.1 then look.Unit else vrLook()
+		local side = look:Cross(Vector3.yAxis)
+		side = if side.Magnitude > 1e-3 then side.Unit else Vector3.xAxis
+		-- a fast push from where the player was looking into an extreme close-up, then a slow
+		-- creep closer while the lens widens (the world tilting around the eye)
+		local push = smoother(progress(g0, g0 + 0.32, t))
+		local hold = progress(g0 + 0.32, g1, t)
+		local dist = (1.7 - 0.6 * hold) * S
+		local close = CFrame.lookAt(eye + look * dist + side * (0.12 * S) + Vector3.new(0, 0.05 * S, 0), eye) * CFrame.Angles(0, 0, math.rad(7 - 13 * hold))
+		return cine.fromCF:Lerp(close, push), cine.prevFov + (20 - cine.prevFov) * push + 10 * hold * push
+	elseif cine.kind == "execution" then
+		local d0, d1, kick = c.DashStart, c.DashEnd, c.KickAt
+		if t >= kick + 0.85 or (rec.endAt and t < kick) then
+			return nil, nil
+		end
+		local root = pin.root
+		if not (root and root.Parent) then
+			local _c, _h, r = localCharacter()
+			root = r
+		end
+		local vPos = if root then root.Position else (rec.target or visualRoot.Position)
+		local vChest = vPos + Vector3.new(0, 0.8, 0)
+		local boss = bonePos("B_Chest")
+		local kd, side = cine.kickDir, cine.side
+		if t < d0 then
+			-- the blade through your chest in profile (a clean line through the body), a slow push in
+			local k = progress(0, d0, t)
+			local cam = vChest + side * (6.2 - 1.0 * k) - kd * 1.0 + Vector3.new(0, 0.35, 0)
+			return CFrame.lookAt(cam, vChest - kd * 0.5) * CFrame.Angles(0, 0, math.rad(6)), 40 - 4 * k
+		elseif t < d1 + 0.04 then
+			-- low, off your shoulder: the Fuhrer blitzing straight at the lens (dolly zoom)
+			local k = progress(d0, d1 + 0.04, t)
+			local cam = vPos + kd * (3.0 - 0.6 * k) + side * 2.6 + Vector3.new(0, -1.2, 0)
+			return CFrame.lookAt(cam, boss) * CFrame.Angles(0, 0, math.rad(-6)), 60 - 20 * k
+		elseif t < kick then
+			-- low two-shot from the side: his hand on the hilt, the knee coming up
+			local k = progress(d1 + 0.04, kick, t)
+			local mid = (boss + vChest) / 2
+			local cam = mid + side * (14 - 1.5 * k) + Vector3.new(0, -1.0, 0)
+			return CFrame.lookAt(cam, mid + Vector3.new(0, 0.5, 0)) * CFrame.Angles(0, 0, math.rad(-8)), 50
+		end
+		-- the kick: a held wide frame on the impact, then a hard cut to the camera flying alongside
+		-- your body
+		if t < kick + 0.16 then
+			return CFrame.lookAt(boss + side * 10 - kd * 6 + Vector3.new(0, 2.5, 0), boss:Lerp(vPos, 0.5)), 60
+		end
+		return CFrame.lookAt(vPos + side * 9 - kd * 3 + Vector3.new(0, 2, 0), vPos + kd * 2), 60
+	end
+	return nil, nil
+end
+
+-- Called every frame from the camera render step (after the camera scripts).
+local function cineCamera()
+	if not cine.kind then
+		return
+	end
+	local cam = workspace.CurrentCamera
+	if not cam then
+		return
+	end
+	local ok, cf, fov = pcall(cineShot, serverNow())
+	if not ok or not cf then
+		cineEnd()
+		return
+	end
+	if cam.CameraType ~= Enum.CameraType.Scriptable then
+		cam.CameraType = Enum.CameraType.Scriptable
+	end
+	cam.CFrame = cf
+	cam.FieldOfView = math.clamp(fov or 70, 12, 100)
+end
+
+local function stepCineGui(dt: number)
+	local want = if cine.kind then 1 else 0
+	cine.bars = approach(cine.bars, want, 7, dt)
+	cine.flash = math.max(0, cine.flash - dt * 4.5)
+	local gui = cine.gui
+	if not gui then
+		return
+	end
+	if cine.bars < 0.002 and cine.flash < 0.002 then
+		gui.Enabled = false
+		return
+	end
+	gui.Enabled = true
+	local bar = 0.115 * smooth(cine.bars)
+	local top, bottom = gui:FindFirstChild("Top"), gui:FindFirstChild("Bottom")
+	if top and top:IsA("Frame") then
+		top.Size = UDim2.fromScale(1, bar)
+	end
+	if bottom and bottom:IsA("Frame") then
+		bottom.Size = UDim2.fromScale(1, bar)
+	end
+	for _, n in { "Left", "Right" } do
+		local f = gui:FindFirstChild(n)
+		if f and f:IsA("Frame") then
+			f.BackgroundTransparency = 1 - 0.55 * smooth(cine.bars)
+		end
+	end
+	local flash = gui:FindFirstChild("Flash")
+	if flash and flash:IsA("Frame") then
+		flash.BackgroundColor3 = cine.flashColor
+		flash.BackgroundTransparency = 1 - math.min(cine.flash, 1) ^ 1.5
+	end
 end
 
 -- Anime speed lines over the screen (built lazily, only while needed).
@@ -6054,6 +7812,13 @@ local function localEffects(dt: number, now: number)
 				knockFrom(center, (c.Radius or 10) * S, c.Knockback or 75)
 			end
 		elseif rec.name == "RemoveEyepatch" then
+			-- two heartbeats as the eye is about to open
+			if fire(rec, "beat1", c.OpenAt - 0.62, t) then
+				screen.impact = math.max(screen.impact, 0.3 * near)
+			end
+			if fire(rec, "beat2", c.OpenAt - 0.3, t) then
+				screen.impact = math.max(screen.impact, 0.45 * near)
+			end
 			if fire(rec, "knock", c.OpenAt, t) then
 				knockFrom(visualRoot.Position, (c.ShockRadius or 26) * S, c.Knockback or 65)
 				screen.impact = math.max(screen.impact, near)
@@ -6080,7 +7845,67 @@ local function localEffects(dt: number, now: number)
 			if fire(rec, "impactFrame", c.Dash[2], t) and near > 0.6 then
 				screen.impact = math.max(screen.impact, 0.35)
 			end
+		elseif rec.name == "PiercingGaze" then
+			local g0, g1 = c.Gaze[1], c.Gaze[2]
+			-- the close-up on the eye, for everyone close enough to see it
+			if fire(rec, "cine", g0, t) and cam and (cam.CFrame.Position - hrp.Position).Magnitude <= (c.GazeRange or 140) * S and myRoot then
+				cineBegin("gaze", rec)
+				cineFlash(Color3.fromRGB(255, 40, 50), 0.35)
+			end
+			if fire(rec, "beat1", g0 + 0.4, t) then
+				screen.impact = math.max(screen.impact, 0.3 * near)
+			end
+			if fire(rec, "beat2", g0 + 0.85, t) then
+				screen.impact = math.max(screen.impact, 0.4 * near)
+			end
+			local mine = myRoot ~= nil and rec.victim == (localPlayer and localPlayer.UserId)
+			tint = math.max(tint, envelope(t, g0, g0 + 0.2, g1, g1 + 0.3) * near * 0.8, envelope(t, g1, g1 + 0.2, c.ReleaseAt, c.ReleaseAt + 0.2) * (if mine then 0.55 else 0.25 * near))
+			if fire(rec, "lockFrame", c.LockAt, t) and mine then
+				cineFlash(Color3.new(1, 1, 1), 0.25)
+			end
+		elseif rec.name == "Execution" then
+			local mine = rec.victim == (localPlayer and localPlayer.UserId)
+			if mine then
+				-- pinned on the blade until the kick, then launched (this client owns its physics)
+				if not rec.data.pinned and t < c.KickAt and not rec.endAt then
+					rec.data.pinned = true
+					pinSelf((c.KickAt - t) / rec.speed + 1.5)
+					cineBegin("execution", rec)
+					cineFlash(Color3.new(1, 1, 1), 1)
+				end
+				if pin.active and (t >= c.KickAt or rec.endAt) then
+					local launch: Vector3? = nil
+					local spin: Vector3? = nil
+					if t >= c.KickAt and not rec.endAt or (rec.endAt and rec.start + c.KickAt / rec.speed <= rec.endAt) then
+						local root = pin.root
+						local kd = flatUnit((if root then root.Position else visualRoot.Position) - visualRoot.Position, vrLook())
+						launch = kd * (c.Knockback or 125) + Vector3.new(0, c.KnockUp or 55, 0)
+						spin = Vector3.new(-kd.Z, 0, kd.X) * 9
+						cineFlash(Color3.fromRGB(255, 40, 50), 1)
+					end
+					releaseSelf(launch, spin)
+				end
+			end
+			-- time seems to stop while he looks at them; the kick is an impact frame for everyone near
+			tint = math.max(tint, envelope(t, 0, 0.1, c.DashStart, c.DashStart + 0.2) * (if mine then 1 else near * 0.7))
+			lines = math.max(lines, envelope(t, c.DashStart, c.DashStart + 0.05, c.DashEnd, c.DashEnd + 0.1) * (if mine then 1 else near * 0.6))
+			if fire(rec, "kickFrame", c.KickAt, t) then
+				screen.impact = math.max(screen.impact, if mine then 1 else near)
+			end
 		end
+	end
+	-- hit confirmation in the Ultimate Eye form: a crimson impact frame on yourself
+	local _ch, myHum, me = localCharacter()
+	if myHum then
+		local hp = myHum.Health
+		if screen.lastHum == myHum and hp < screen.lastHp - 1 and enraged and me and (me.Position - hrp.Position).Magnitude < 60 * S then
+			local at = me.Position + Vector3.new(0, 0.8, 0)
+			impactStar(at, 7, C_RED, 0.25)
+			sparks(at, C_RED, 10, 16)
+			screen.impact = math.max(screen.impact, 0.45)
+		end
+		screen.lastHum = myHum
+		screen.lastHp = hp
 	end
 	shake.sustain = approach(shake.sustain, sustain, 6, dt)
 	updateSpeedLines(lines, Color3.fromRGB(255, 220, 220))
@@ -6424,8 +8249,14 @@ local function updateActions(now: number)
 			rec.rootTarget = hrp.CFrame:PointToObjectSpace(rec.target)
 		end
 		local root = victimRoot(rec)
-		if root and (rec.name == "PhantomStep" or rec.name == "Challenge") then
+		if root and (rec.name == "PhantomStep" or rec.name == "Challenge" or rec.name == "Execution" or (rec.name == "PiercingGaze" and rec.t < (rec.cfg.LockAt or 0))) then
 			rec.rootTarget = hrp.CFrame:PointToObjectSpace(root.Position)
+		end
+		if rec.name == "Execution" and root then
+			-- his left hand closes on the hilt of the copy stuck in the victim (see gazeBlade)
+			local chest = root.Position + Vector3.new(0, 0.75, 0)
+			local hilt = if gaze.stuckIn == root then chest - gaze.dir * (gaze.bladeLen * 0.35) else chest - flatUnit(chest - hrp.Position) * (4.4 * S * 0.35)
+			rec.hilt = hrp.CFrame:PointToObjectSpace(hilt)
 		end
 		if over then
 			if STOP[rec.name] then
@@ -6568,9 +8399,19 @@ local function animate(dt: number, now: number, clock: number)
 		end
 	end
 	for _, ev in anim.events do
-		if ev.name == "footstep" and ev.data.run > 0.3 and footDust then
+		if ev.name == "footstep" then
 			local n = if ev.data.side == 1 then "R" else "L"
-			footDust(bonePos("B_Toe" .. n))
+			if ev.data.run > 0.3 and footDust then
+				footDust(bonePos("B_Toe" .. n))
+			end
+			if eyeMode.on then
+				local cam = workspace.CurrentCamera
+				local toe = bonePos("B_Toe" .. n)
+				if cam and (cam.CFrame.Position - toe).Magnitude < 120 * S then
+					local g = groundAt(toe, 8)
+					ripple(g, (2.4 + 1.6 * ev.data.run) * S, 0.45)
+				end
+			end
 		end
 	end
 	for _, rec in actions do
@@ -6581,11 +8422,44 @@ local function animate(dt: number, now: number, clock: number)
 	end
 	applyGroups(clock)
 	applyDissolve()
+	setEyeMode(enraged and not deathRec and F.dissolve < 0.5)
 	for side, tr in trails do
 		local on = F.trail[side] > 0.05 and F.vis[if side == 1 then "SaberR" else "SaberL"] ~= false
 		if tr.Enabled ~= on then
 			tr.Enabled = on
-			tr.Color = CS(slashColor())
+			if eyeMode.on then
+				tr.Color = CS(0, Color3.new(1, 1, 1), 0.35, slashColor(), 1, C_DARKRED)
+				tr.Lifetime = 0.2
+			else
+				tr.Color = CS(slashColor())
+				tr.Lifetime = 0.16
+			end
+		end
+		local outer = eyeMode.outer[side]
+		if outer then
+			local outerOn = on and eyeMode.on
+			if outer.Enabled ~= outerOn then
+				outer.Enabled = outerOn
+			end
+		end
+	end
+	if eyeMode.on then
+		if clock >= eyeMode.nextCrackle then
+			-- red lightning crawling over him
+			eyeMode.nextCrackle = clock + 0.22 + math.random() * 0.6
+			local names = { "B_Chest", "B_HandR", "B_HandL", "B_Head", "B_Hips", "B_ShinR", "B_ShinL", "B_ForearmR", "B_ForearmL", "B_SaberTipR" }
+			local name = names[math.random(#names)]
+			if anim.bones[name] then
+				local a = bonePos(name)
+				local off = Vector3.new(math.random() - 0.5, math.random() - 0.25, math.random() - 0.5)
+				if off.Magnitude > 1e-3 then
+					lightning(a, a + off.Unit * (1.2 + math.random() * 1.8) * S, C_RED, 0.12 + math.random() * 0.08, (0.05 + math.random() * 0.04) * S, 0.3)
+				end
+			end
+		end
+		if eyeMode.star then
+			local k = 1.3 + 0.35 * math.sin(clock * TAU * 1.1) + 0.15 * math.sin(clock * 23)
+			eyeMode.star.Size = UDim2.fromScale(k * S, k * S)
 		end
 	end
 	local eyeOn = model:GetAttribute("EyeOpen") == true and enraged and F.dissolve < 0.5
@@ -6624,6 +8498,8 @@ local function onPreSimulation(dt: number)
 			animate(dt, now, clock)
 		end
 		localEffects(dt, now)
+		stepPin()
+		stepCineGui(dt)
 		stepFx(dt)
 		stepHitFlash(dt)
 	end)
@@ -6654,6 +8530,17 @@ local function cleanup()
 		return
 	end
 	alive = false
+	pcall(cineEnd)
+	pcall(releaseSelf, nil)
+	pcall(function()
+		if pin.tumble > 0 and pin.hum then
+			pin.hum.PlatformStand = false
+		end
+	end)
+	if cine.gui then
+		cine.gui:Destroy()
+		cine.gui = nil
+	end
 	for _, c in connections do
 		c:Disconnect()
 	end
@@ -6748,9 +8635,10 @@ RunService:BindToRenderStep(SHAKE_KEY .. "Pre", Enum.RenderPriority.Camera.Value
 	end
 	shakeUndo()
 end)
-RunService:BindToRenderStep(SHAKE_KEY .. "Post", Enum.RenderPriority.Camera.Value + 1, function()
+RunService:BindToRenderStep(SHAKE_KEY .. "Post", Enum.RenderPriority.Camera.Value + 1, function(dt: number)
 	if model:IsDescendantOf(workspace) then
-		shakeApply()
+		cineCamera() -- a cutscene shot replaces the camera; the shake still plays on top of it
+		shakeApply(dt)
 	end
 end)
 

@@ -99,7 +99,29 @@ He **tears off the eyepatch**:
 1. His left hand reaches up and grips the patch.
 2. He tears it away and flicks it aside.
 3. His head bows, then rises.
-4. The Ouroboros eye opens with a red pressure wave and a light trail.
+4. Red light streams into the closed eye, lightning snaps up from the ground and the screen pulses
+   like a heartbeat.
+5. The Ouroboros eye opens:
+   * the Ouroboros sigil spreads on the ground under him;
+   * a pillar of red light shoots up and a dome of force bursts out;
+   * lightning radiates off him and rocks lift off the floor.
+
+**Piercing Gaze (once per fight, straight after the eye opens).**
+
+1. The camera cuts to an extreme close-up of the Ultimate Eye for every player nearby.
+2. A red sight line from his eye follows one player while he winds up a javelin throw.
+3. The line **locks and turns white**, and he hurls the saber down it, straight at their chest.
+4. It doesn't home in, so **step off the line to dodge it**.
+
+If it hits, that player gets the **Execution cutscene**:
+
+1. A close-up of the blade through their chest.
+2. A low shot of him blitzing in.
+3. His hand closing on the hilt.
+4. A front kick that rips the blade out and sends them flying, with an impact frame.
+5. The camera rides alongside their flight, then hands control back.
+
+Everyone else sees it play out in the arena.
 
 From then on:
 
@@ -110,7 +132,29 @@ From then on:
 | Ability | What happens |
 |---|---|
 | **Thousand Cuts** | The eye locks on and time seems to stop. He then cuts **three times faster**: 12 slashes in 1.5 s while advancing, with afterimages. It ends in a **cross-shaped slash wave** that tears 80 studs down the arena. |
-| **Phantom Step** | He reads where you are going and dashes a **pentagram of five cuts** through that spot. The cuts hang in the air while he stands with his back turned, then **all detonate at once**. Get out of the lines! |
+| **Phantom Step** | He reads where you are going and dashes a **pentagram of five cuts** through that spot, inside a transmutation circle. The cuts hang in the air while he stands with his back turned, then **all detonate at once**. Get out of the lines! |
+
+**The Ultimate Eye form looks different.**
+
+* **On him:** a smouldering crimson aura and embers, red lightning crawling over him, a burning
+  star on the eye, red ripples where he steps, and crimson blade trails with a wider glow trail.
+* **On his attacks:** every attack draws in crimson with black ink edges and a white-hot core.
+  * Cross Cut and the flurry leave cuts hanging in the air.
+  * The dash leaves a lightning streak.
+  * The Cleaver raises a pillar and the Ouroboros sigil.
+
+**What you see is what hits you.**
+
+* In the eye form, each attack first shows its exact hitbox on the ground for a moment:
+  * the Cross Cut cone;
+  * the Lunge line;
+  * the Cleaver landing circle and fissure;
+  * the Thousand Cuts cone.
+  A bright timing line runs out to the edge exactly when it lands.
+* The Saber Throw and Piercing Gaze show their flight line.
+* Hits are judged where each player is on their own screen, corrected for ping. If you dodged on
+  your screen, you dodged.
+* A player's body width is counted, and the slash effects are drawn at the attacks' real reach.
 
 ### Death
 
@@ -146,6 +190,8 @@ On top of the key poses:
 | Remove Eyepatch | Reach, grip, tear, toss, bow; the eye opens |
 | Lunge, Cross Cut, Saber Throw, Tank Cleaver | The 4 basic attacks |
 | Thousand Cuts, Phantom Step | The 2 Ultimate Eye abilities |
+| Piercing Gaze | Stare (eye close-up), slow javelin wind-up while the line tracks you, the throw; after a miss he draws a spare |
+| Execution | Straightens, blitzes in, grips the hilt in the victim's chest, front kick that tears the blade out, follow-through, chiburi flick |
 | Death | Stagger → kneel → falls on his back → fades |
 
 ![run](previews/anim_run.png)
@@ -153,6 +199,13 @@ On top of the key poses:
 ![remove cape](previews/anim_remove_cape.png)
 ![lunge](previews/anim_lunge.png)
 ![thousand cuts](previews/anim_thousand_cuts.png)
+![piercing gaze](previews/anim_piercing_gaze.png)
+![execution](previews/anim_execution.png)
+
+The Execution's camera shots, previewed offline. A grey stand-in plays the victim, and the effects
+aren't drawn.
+
+![execution cutscene](previews/cutscene_execution.png)
 
 These sheets are rendered offline from the real `Animator` code running on the real rig (see
 *Tools*).
@@ -168,6 +221,11 @@ These sheets are rendered offline from the real `Animator` code running on the r
 * **Sounds:** `Sounds.*`. The defaults ship with Roblox; paste your own `rbxassetid://…` ids and
   leave empty to skip.
 * **Colours:** `Colors.*` (see above).
+* **Piercing Gaze / Execution:** `Actions.PiercingGaze` (timings, `GazeRange`, throw `Speed` and
+  `HitRadius`, `Damage`) and `Actions.Execution` (dash and kick timings, `KickDamage`, `Knockback`).
+  They must stay in sync with the camera shots, so change the timings with care.
+* **Testing:** `TestPhase2 = true` makes him drop to 49% three seconds after Play. He tears off the
+  cape and the eyepatch, then uses Piercing Gaze on the first player he targets.
 
 Damage and targeting:
 
@@ -181,7 +239,7 @@ Damage and targeting:
 | `tools/blender/build_rig.py` | Blender 4.2 (bpy) script that turns the premade design GLB into the improved, rigged model. It sculpts the muscle shoulders and arms, refits the sleeves, builds the skeleton, skins it and exports `KingBradley.fbx/.glb` and `rig.json`. |
 | `tools/build_scripts.py` | Packs `src/` into `KingBradleyScripts.rbxmx` |
 | `tools/luau/make_harness.py` + `driver.luau` + `shim.luau` | Run the real `Animator` in the Luau CLI on the real rig and dump every bone per frame (also a NaN check) |
-| `tools/anim_render.mjs` | Renders those frames on the skinned GLB in headless Chromium (three.js) as contact sheets |
+| `tools/anim_render.mjs` | Renders those frames on the skinned GLB in headless Chromium (three.js) as contact sheets. The `cine` view replays the cutscene camera shots with a stand-in victim (`CINE` environment variable). |
 
 ## Troubleshooting
 
