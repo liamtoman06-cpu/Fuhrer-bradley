@@ -220,6 +220,9 @@ local function CS(...): ColorSequence
 	if #a == 1 then
 		return ColorSequence.new(a[1])
 	end
+	if #a == 2 and typeof(a[1]) == "Color3" then
+		return ColorSequence.new(a[1], a[2]) -- start colour -> end colour
+	end
 	local kps = {}
 	for i = 1, #a, 2 do
 		table.insert(kps, ColorSequenceKeypoint.new(a[i], a[i + 1]))
