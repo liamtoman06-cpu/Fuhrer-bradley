@@ -907,6 +907,10 @@ log("total triangles", total, "bones", len(arm_data.bones))
 # =================================================================================================
 # 11. Export
 # =================================================================================================
+# importers may name parts after the mesh data: make it match the object name
+for o in bpy.data.objects:
+    if o.type == "MESH":
+        o.data.name = o.name
 select_only([o for o in bpy.data.objects], rig)
 bpy.ops.export_scene.gltf(filepath=os.path.join(OUT, "KingBradley.glb"), export_format="GLB", use_selection=True,
                           export_skins=True, export_animations=False, export_apply=False, export_yup=True)

@@ -2347,6 +2347,81 @@ do
 	end
 end
 model:SetAttribute("BradleyBoss", true) -- BossClient waits for this before it starts
+
+-- The importer may name each MeshPart after its mesh data instead of its object ("Mesh_65" for
+-- "Cape_CoatBlue"). Parts are found by these names (cape, eyepatch, sabers, colours): restore them.
+do
+	local MESH_NAMES = {
+	["BodySkin"] = "Body_Skin",
+	["BodySkin.002"] = "Shirt_Shirt",
+	["Mesh_10"] = "Head_OuroSclera",
+	["Mesh_11"] = "Head_OuroSigil",
+	["Mesh_14"] = "Head_Lips",
+	["Mesh_15"] = "Patch_Eyepatch",
+	["Mesh_17"] = "Collar_ShirtRib",
+	["Mesh_18"] = "Harness_LeatherDark",
+	["Mesh_19"] = "Harness_LeatherBelt",
+	["Mesh_2"] = "Head_SkinShade",
+	["Mesh_20"] = "Harness_Iron",
+	["Mesh_21"] = "Pelvis_Trousers",
+	["Mesh_22"] = "Belt_LeatherBelt",
+	["Mesh_23"] = "Belt_LeatherDark",
+	["Mesh_24"] = "Belt_Brass",
+	["Mesh_25"] = "Belt_Iron",
+	["Mesh_3"] = "Head_EyeWhite",
+	["Mesh_30"] = "ForearmL_Glove",
+	["Mesh_31"] = "ForearmL_LeatherDark",
+	["Mesh_32"] = "HandL_Glove",
+	["Mesh_33"] = "HandL_LeatherDark",
+	["Mesh_38"] = "ForearmR_Glove",
+	["Mesh_39"] = "ForearmR_LeatherDark",
+	["Mesh_4"] = "Head_Iris",
+	["Mesh_40"] = "HandR_Glove",
+	["Mesh_41"] = "HandR_LeatherDark",
+	["Mesh_42"] = "ThighL_Trousers",
+	["Mesh_43"] = "ShinL_Trousers",
+	["Mesh_44"] = "ShinL_Boot",
+	["Mesh_45"] = "ShinL_Iron",
+	["Mesh_46"] = "FootL_Boot",
+	["Mesh_47"] = "FootL_Sole",
+	["Mesh_48"] = "ThighR_Trousers",
+	["Mesh_49"] = "ShinR_Trousers",
+	["Mesh_5"] = "Head_IrisRim",
+	["Mesh_50"] = "ShinR_Boot",
+	["Mesh_51"] = "ShinR_Iron",
+	["Mesh_52"] = "FootR_Boot",
+	["Mesh_53"] = "FootR_Sole",
+	["Mesh_54"] = "SaberL_Brass",
+	["Mesh_55"] = "SaberL_Grip",
+	["Mesh_56"] = "SaberL_Steel",
+	["Mesh_57"] = "SaberR_Brass",
+	["Mesh_58"] = "SaberR_Grip",
+	["Mesh_59"] = "SaberR_Steel",
+	["Mesh_6"] = "Head_Pupil",
+	["Mesh_65"] = "Cape_CoatBlue",
+	["Mesh_66"] = "Cape_CoatLining",
+	["Mesh_67"] = "Cape_Piping",
+	["Mesh_68"] = "Cape_Gold",
+	["Mesh_69"] = "Cape_Brass",
+	["Mesh_7"] = "Head_EyeGlint",
+	["Mesh_8"] = "Head_LashLine",
+	["Mesh_9"] = "Head_Crease",
+	["SleeveHem_ShirtRib.001"] = "SleeveHem_ShirtRib"
+	}
+	local renamed = 0
+	for _, d in model:GetDescendants() do
+		if d:IsA("MeshPart") then
+			local proper = MESH_NAMES[d.Name] or MESH_NAMES[(string.gsub(d.Name, "%.%d+$", ""))]
+			if proper and proper ~= d.Name then
+				d.Name = proper
+				renamed += 1
+			end
+		end
+	end
+	if renamed > 0 then
+		print(("[Bradley] restored the names of %d imported meshes"):format(renamed))
+	end
+end
 -- a boss must always be on every player's machine: never streamed out (StreamingEnabled places)
 pcall(function()
 	model.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
