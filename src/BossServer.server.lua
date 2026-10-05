@@ -142,16 +142,16 @@ do
 	end
 	if #removed > 0 then
 		warn("[Bradley] removed old King Bradley scripts from inside " .. model:GetFullName() .. ": " .. table.concat(removed, ", "))
-		local oldRoot = model:FindFirstChild("HumanoidRootPart")
-		if oldRoot and not oldRoot:GetAttribute("BradleyRoot") then
-			oldRoot:Destroy()
-		end
-		for _, d in model:GetDescendants() do
-			if (d.Name == "BossWeld" and d:IsA("WeldConstraint")) or (d.Name == "Hitbox" and d:IsA("BasePart")) then
-				d:Destroy()
-			end
+	end
+	-- pieces a previous run built (a boss copied out of a Play session keeps them): rebuilt below.
+	-- A HumanoidRootPart without the BradleyRoot mark is the importer's (it may hold the bones) and stays.
+	for _, d in model:GetDescendants() do
+		if (d.Name == "BossWeld" and d:IsA("WeldConstraint")) or (d.Name == "Hitbox" and d:IsA("BasePart"))
+			or (d.Name == "HumanoidRootPart" and d:IsA("BasePart") and d:GetAttribute("BradleyRoot")) then
+			d:Destroy()
 		end
 	end
+	model:SetAttribute("RigReady", nil)
 end
 
 -- move in: the scripts live inside the boss (BossClient must be in his model to run for players,
@@ -429,6 +429,8 @@ local function findFloor(): number?
 	params.FilterDescendantsInstances = ignore
 	params.IgnoreWater = true
 	params.RespectCanCollide = true
+	-- a surface counts as his floor when it is below his chest (he may be imported sunk into it);
+	-- anything higher is a roof he passes through; if he is buried, the lowest surface above him wins
 	local below: number? = nil
 	local above: number? = nil
 	local reach = height * 0.2
@@ -440,7 +442,7 @@ local function findFloor(): number?
 				break
 			end
 			local y = hit.Position.Y
-			if y <= lo + height * 0.3 then
+			if y <= lo + height * 0.6 then
 				below = math.max(below or -math.huge, y)
 				break
 			end
@@ -1909,6 +1911,8 @@ local function deathSequence()
 	task.wait(holdTime)
 	local tpl = template
 	if not canRespawn or not tpl or not tpl.Parent or not model.Parent then
+		model:SetAttribute("RigReady", false) -- clients tear down their effects before he goes
+		task.wait(0.5)
 		model:Destroy()
 		return
 	end

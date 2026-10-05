@@ -96,8 +96,8 @@ local I = CFrame.identity
 -- =============================================================================================
 local readyWait = 0
 while not model:GetAttribute("RigReady") do
-	if not model:IsDescendantOf(workspace) then
-		return
+	if not model:IsDescendantOf(workspace) or model:GetAttribute("RigReady") == false then
+		return -- gone, or a dead boss waiting to be replaced by a fresh one
 	end
 	task.wait(0.2)
 	readyWait += 1
@@ -2241,8 +2241,20 @@ watch(RunService.Heartbeat, function(dt: number)
 		end
 	end
 end)
-RunService:BindToRenderStep(SHAKE_KEY .. "Pre", Enum.RenderPriority.Camera.Value - 1, shakeUndo)
-RunService:BindToRenderStep(SHAKE_KEY .. "Post", Enum.RenderPriority.Camera.Value + 1, shakeApply)
+-- the bindings check that the boss still exists (if he is deleted outright, the cleanup handlers
+-- of a script that is being torn down may never run)
+RunService:BindToRenderStep(SHAKE_KEY .. "Pre", Enum.RenderPriority.Camera.Value - 1, function()
+	if not model:IsDescendantOf(workspace) then
+		cleanup()
+		return
+	end
+	shakeUndo()
+end)
+RunService:BindToRenderStep(SHAKE_KEY .. "Post", Enum.RenderPriority.Camera.Value + 1, function()
+	if model:IsDescendantOf(workspace) then
+		shakeApply()
+	end
+end)
 
 do
 	local ok, result = pcall(buildBossBar)
