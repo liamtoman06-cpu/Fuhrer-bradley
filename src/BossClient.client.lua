@@ -3,8 +3,9 @@
 	King Bradley boss - client: animation (through the Animator module), visual effects, the local
 	player's knockback, camera shake, screen effects, the anime outline and the boss health bar.
 
-	A Script (RunContext = Client) that sits directly inside the boss model, so every player runs their
-	own copy (each respawned boss runs a fresh one).
+	A Script (RunContext = Client). BossServer moves it into the boss model (wherever the scripts were
+	inserted) and marks the model with the BradleyBoss attribute; this script waits for that, so every
+	player runs their own copy (each respawned boss runs a fresh one).
 
 	Contract with BossServer:
 	  * the boss is the imported, skinned model: Bone instances named B_* drive the meshes. The server
@@ -27,10 +28,15 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Debris = game:GetService("Debris")
 
-local model = script.Parent
-if not (model and model:IsA("Model")) then
-	warn("[Bradley] BossClient must be a direct child of the boss Model")
-	return
+local function claimedModel(): Model?
+	local p = script.Parent
+	return if p and p:IsA("Model") and p:GetAttribute("BradleyBoss") == true then p else nil
+end
+local model = claimedModel()
+while not model do
+	-- still in the KingBradleyScripts folder: BossServer is about to move this script into the boss
+	task.wait(0.25)
+	model = claimedModel()
 end
 while not model:IsDescendantOf(workspace) do
 	model.AncestryChanged:Wait()
@@ -100,11 +106,13 @@ S = if type(S) == "number" and S > 0 then S else 1
 
 -- every Bone of the imported rig (top-level bones are folded onto the root part's frame)
 local boneObjs: { [string]: Bone } = {}
+local allBones: { Bone } = {} -- every copy (an importer may give each mesh its own skeleton copy)
 local desc = { bones = {}, holder = I }
 do
 	for _, d in model:GetDescendants() do
 		if d:IsA("Bone") then
-			boneObjs[d.Name] = d
+			table.insert(allBones, d)
+			boneObjs[d.Name] = boneObjs[d.Name] or d
 		end
 	end
 	for name, b in boneObjs do
@@ -122,8 +130,8 @@ if not boneObjs.B_Hips then
 end
 local anim = Animator.new(desc, Poses, Config)
 local animBones: { { Bone } } = {}
-for name, b in boneObjs do
-	table.insert(animBones, { b, name })
+for _, b in allBones do
+	table.insert(animBones, { b, b.Name })
 end
 log(("%d bones, unit %.2f"):format(#desc.bones, anim.U))
 

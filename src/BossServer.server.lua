@@ -1,7 +1,9 @@
 --[[
 	King Bradley boss - server brain.
 
-	A Script (RunContext = Server) that sits directly inside the KingBradley model. It:
+	A Script (RunContext = Server). Drop the KingBradleyScripts folder anywhere in Workspace (or
+	ServerScriptService): this script finds the imported King Bradley model (the Model holding the
+	B_Hips bone), moves itself and the other scripts into it and puts him on the ground. Then it:
 	  1. keeps a pristine copy of the boss in ServerStorage so he can respawn,
 	  2. builds the runtime rig: a Motor6D per B_* bone, welds for every visual part, physics,
 	  3. runs the AI: pick a target, walk or sprint after it (pathfinding + unsticking), leash home,
@@ -21,19 +23,133 @@ local RunService = game:GetService("RunService")
 local ServerStorage = game:GetService("ServerStorage")
 local PathfindingService = game:GetService("PathfindingService")
 
-local model = script.Parent
-if not (model and model:IsA("Model")) then
-	warn("[Bradley] BossServer must be a direct child of the boss Model")
-	return
+-- ---------------------------------------------------------------------------------------------
+-- 0. Find the boss and move in
+-- ---------------------------------------------------------------------------------------------
+local SCRIPT_NAMES = { "Config", "Motion", "Poses", "Animator", "BossClient" }
+
+local function meshCount(inst: Instance): number
+	local n = 0
+	for _, d in inst:GetDescendants() do
+		if d:IsA("MeshPart") then
+			n += 1
+		end
+	end
+	return n
 end
+
+-- The boss is the innermost Model around the B_Hips bone that holds the meshes too (the importer
+-- may nest models; an arena model around him must not be taken for him).
+local function bossAround(hips: Instance): Model?
+	local fallback: Model? = nil
+	local p = hips.Parent
+	while p and p ~= workspace and p ~= game do
+		if p:IsA("Model") then
+			fallback = fallback or p
+			if meshCount(p) >= 20 then
+				return p
+			end
+		end
+		p = p.Parent
+	end
+	return fallback
+end
+
+local function hipsIn(inst: Instance): Bone?
+	local b = inst:FindFirstChild("B_Hips", true)
+	return if b and b:IsA("Bone") then b else nil
+end
+
+local function takenByAnother(m: Model): boolean
+	for _, c in m:GetChildren() do
+		if c ~= script and c.Name == script.Name and c:IsA("BaseScript") then
+			return true
+		end
+	end
+	return false
+end
+
+local function findBoss(): Model?
+	-- inside the boss already (the documented install, and every respawn)
+	local p = script.Parent
+	if p and p:IsA("Model") then
+		local hips = hipsIn(p)
+		if hips then
+			return bossAround(hips) or p
+		end
+	end
+	-- otherwise: the imported model somewhere in the Workspace
+	for _, d in workspace:GetDescendants() do
+		if d.Name == "B_Hips" and d:IsA("Bone") then
+			local m = bossAround(d)
+			if m and not takenByAnother(m) then
+				return m
+			end
+		end
+	end
+	return nil
+end
+
+local function explainMissing()
+	-- meshes named like ours but no skeleton: the import dropped the rig
+	for _, d in workspace:GetDescendants() do
+		if d:IsA("MeshPart") and (d.Name == "Body_Skin" or d.Name == "Shirt_Shirt") then
+			warn("[Bradley] SETUP PROBLEM: found King Bradley's meshes (" .. d:GetFullName() .. ") but no bones. "
+				.. "He was imported without his skeleton, so he cannot animate. Delete him and import "
+				.. "model/KingBradley.fbx again with File > Import 3D, keeping the rig (Rig Type: Custom / "
+				.. "'Import rig' on, NOT 'No Rig') and without 'Merge Meshes'.")
+			return
+		end
+	end
+	warn("[Bradley] SETUP PROBLEM: could not find King Bradley in the Workspace. Import model/KingBradley.fbx "
+		.. "with File > Import 3D (keep the rig) so that a Model with the bones B_Hips, B_Chest, ... is in "
+		.. "the Workspace. The scripts find him by themselves.")
+end
+
+local model = findBoss()
+if not model then
+	explainMissing()
+	repeat
+		task.wait(2)
+		model = findBoss()
+	until model
+end
+
+-- move in: the scripts live inside the boss (BossClient must be in his model to run for players,
+-- and respawns clone the model with everything in it)
+do
+	local home = script.Parent
+	if home ~= model then
+		for _, name in SCRIPT_NAMES do
+			local here = home and home:FindFirstChild(name)
+			if here and (here:IsA("ModuleScript") or here:IsA("BaseScript")) and not model:FindFirstChild(name) then
+				here.Parent = model
+			end
+		end
+		script.Parent = model
+		if home and home:IsA("Folder") and #home:GetChildren() == 0 then
+			home:Destroy()
+		end
+	end
+end
+model:SetAttribute("BradleyBoss", true) -- BossClient waits for this before it starts
 
 -- A copy kept in ReplicatedStorage (or similar) idles here until it is put in the Workspace.
 while not model:IsDescendantOf(workspace) do
 	model.AncestryChanged:Wait()
 end
 
-local Config = require(model:WaitForChild("Config"))
-local Motion = require(model:WaitForChild("Motion"))
+local function requireModule(name: string)
+	local m = model:FindFirstChild(name) or model:WaitForChild(name, 10)
+	if not (m and m:IsA("ModuleScript")) then
+		error("[Bradley] SETUP PROBLEM: the " .. name .. " module is missing from " .. model:GetFullName()
+			.. ". Insert KingBradleyScripts.rbxmx again (all six scripts must be together).")
+	end
+	return require(m)
+end
+
+local Config = requireModule("Config")
+local Motion = requireModule("Motion")
 local Actions = Config.Actions
 local Cooldowns = Config.Cooldowns
 
@@ -224,6 +340,36 @@ if type(Config.TargetHeight) == "number" and Config.TargetHeight > 0 then
 			-- ScaleTo scales about the pivot: put his feet back where they were placed
 			local newLo = heightRange()
 			model:PivotTo(model:GetPivot() + Vector3.new(0, lo - newLo, 0))
+		end
+	end
+end
+-- stand him on whatever is below him (the importer drops models in mid-air in front of the camera)
+do
+	local lo, hi = heightRange()
+	if lo < math.huge then
+		local box = model:GetBoundingBox()
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		local ignore: { Instance } = { model }
+		for _, plr in Players:GetPlayers() do
+			if plr.Character then
+				table.insert(ignore, plr.Character)
+			end
+		end
+		params.FilterDescendantsInstances = ignore
+		local floorY: number? = nil
+		local reach = math.max(hi - lo, 1) * 0.25
+		for _, off in { Vector3.zero, Vector3.new(reach, 0, 0), Vector3.new(-reach, 0, 0), Vector3.new(0, 0, reach), Vector3.new(0, 0, -reach) } do
+			local from = Vector3.new(box.X + off.X, hi + 0.5, box.Z + off.Z)
+			local hit = workspace:Raycast(from, Vector3.new(0, -5000, 0), params)
+			if hit then
+				floorY = math.max(floorY or -math.huge, hit.Position.Y)
+			end
+		end
+		if floorY then
+			model:PivotTo(model:GetPivot() + Vector3.new(0, floorY - lo + 0.05, 0))
+		else
+			warn("[Bradley] there is no ground under King Bradley: place him above a floor or the Baseplate")
 		end
 	end
 end
@@ -439,6 +585,21 @@ do
 end
 
 model:SetAttribute("RigReady", true)
+do
+	local bones, missing = 0, {}
+	for _, d in model:GetDescendants() do
+		if d:IsA("Bone") then
+			bones += 1
+		end
+	end
+	for _, n in { "B_Hips", "B_Chest", "B_Head", "B_HandR", "B_HandL", "B_FootR", "B_FootL", "B_Cape3_1" } do
+		if not bone(n) then
+			table.insert(missing, n)
+		end
+	end
+	print(("[Bradley] ready: %s, %d meshes, %d bones, %.1f studs tall%s"):format(model:GetFullName(), meshCount(model), bones,
+		topY - groundY, if #missing > 0 then " (missing bones: " .. table.concat(missing, ", ") .. ")" else ""))
+end
 log(string.format("rig ready: %d welds, scale %.2f, hip height %.2f", weldCount, scale, hipHeight))
 
 -- ---------------------------------------------------------------------------------------------

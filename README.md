@@ -33,26 +33,27 @@ The model is an improved version of the premade Bradley design:
 
 1. **Import the model.** In Roblox Studio, open **File → Import 3D** (or Avatar → Import 3D) and pick
    `model/KingBradley.fbx`.
-   * Keep the rig/armature (bones) in the import. The import should give one Model with MeshParts
-     and `Bone` objects such as `B_Hips`, `B_Chest`, `B_Cape3_2`.
-   * Size does not matter: the server scales the model to `Config.TargetHeight` (9 studs) at
-     start.
-   * Name the model `KingBradley`.
+   * Keep the **rig**: Rig Type **Custom**, never "No Rig".
+   * Do **not** tick "Merge Meshes".
+   * The import should give a Model with MeshParts and `Bone` objects such as `B_Hips`, `B_Chest`
+     and `B_Cape3_2`.
+   * Size and height don't matter. The server scales him to `Config.TargetHeight` (9 studs) and
+     drops him onto the ground below him.
 2. **Insert the scripts.** Right-click **Workspace → Insert from File…** and pick
-   `KingBradleyScripts.rbxmx`.
-3. **Move the scripts into the model.** All 6 scripts must be **direct children of the model**.
-   Drag them in, or run this in the command bar:
-   ```lua
-   local f = workspace.KingBradleyScripts; local m = workspace.KingBradley; for _, c in f:GetChildren() do c.Parent = m end; f:Destroy()
-   ```
-4. **Place him.** Put him where the fight should happen, standing on solid ground and facing where
-   he should stand guard. That spot is his home: he returns there and resets when players flee past
+   `KingBradleyScripts.rbxmx`. That's it: you don't need to move anything. When the game starts,
+   the scripts find the imported model by themselves (the Model holding the `B_Hips` bone) and
+   move themselves into it.
+3. **Place him.** Move him to where the fight should happen and turn him to face where he should
+   stand guard. That spot is his home: he returns there and resets when players flee past
    `LeashRange`.
-5. **Press Play.**
-   * The server anchors and scales the model and colours it from `Config.Colors`.
-   * It builds the `HumanoidRootPart`, the `Humanoid` and the hitboxes, then welds everything
-     together.
-   * Nothing needs to be uploaded to the animation editor.
+4. **Press Play.** The Output window (View → Output) should show:
+   ```
+   [Bradley] ready: Workspace.KingBradley, 69 meshes, 49 bones, 9.0 studs tall
+   ```
+   If it shows a `[Bradley] SETUP PROBLEM` line instead, that line says exactly what to fix.
+
+Nothing needs to be uploaded to the animation editor. The scripts also work when you drop them
+straight into the model, or put the folder in ServerScriptService.
 
 ### Colours
 
@@ -176,6 +177,15 @@ Damage and targeting:
 | `tools/build_scripts.py` | Packs `src/` into `KingBradleyScripts.rbxmx` |
 | `tools/luau/make_harness.py` + `driver.luau` + `shim.luau` | Run the real `Animator` in the Luau CLI on the real rig and dump every bone per frame (also a NaN check) |
 | `tools/anim_render.mjs` | Renders those frames on the skinned GLB in headless Chromium (three.js) as contact sheets |
+
+## Troubleshooting
+
+| What you see | Cause and fix |
+|---|---|
+| He floats where he was imported and never moves | The scripts never started. Check that `KingBradleyScripts` (or its six scripts) is in Workspace or ServerScriptService, and read the `[Bradley]` lines in Output. |
+| `SETUP PROBLEM: found King Bradley's meshes ... but no bones` | He was imported without his skeleton. Delete him and import again with the rig kept (Rig Type Custom) and Merge Meshes off. |
+| `SETUP PROBLEM: could not find King Bradley` | The imported model isn't in the Workspace, or the import has no `B_Hips` bone. |
+| `there is no ground under King Bradley` | Place him above a floor, terrain or the Baseplate. |
 
 ## Not verifiable outside Studio
 
