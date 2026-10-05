@@ -1048,16 +1048,21 @@ local function throwSaber(rec: ActionRec)
 	if #parts == 0 then
 		return
 	end
-	local impact = rec.target or (origin.Position + vrLook() * 40 * S)
 	local start = origin.Position
-	local dir = impact - start
-	local dist = dir.Magnitude
-	if dist < 0.5 then
-		dir = vrLook()
-		dist = 1
-	else
-		dir = dir.Unit
+	local impact, dir, dist
+	local function aimAt(goal: Vector3)
+		impact = goal
+		dir = impact - start
+		dist = dir.Magnitude
+		if dist < 0.5 then
+			dir = vrLook()
+			dist = 1
+		else
+			dir = dir.Unit
+		end
 	end
+	local aimed = rec.target
+	aimAt(rec.target or (start + vrLook() * 40 * S))
 	-- the blade runs from the saber bone to the tip bone: turn the copy so that line points at the target
 	local bladeLocal = (anim.bones.B_SaberTipL and anim.bones.B_SaberL) and (anim.bones.B_SaberL.restRel:Inverse() * anim.bones.B_SaberTipL.restRel).Position or Vector3.new(0, -1, 0)
 	local bladeLen = bladeLocal.Magnitude
@@ -1068,6 +1073,13 @@ local function throwSaber(rec: ActionRec)
 	local life = flight + 6
 	local landed = false
 	addFx(life, parts, function(age)
+		-- the server's raycast impact can replicate after the release: retarget the flight
+		if not landed and rec.target and rec.target ~= aimed then
+			aimed = rec.target
+			aimAt(rec.target)
+			flight = math.max(dist / speed, age + 0.05)
+			stuck = impact - dir * (bladeLen * 0.85)
+		end
 		if age < flight then
 			local p = start:Lerp(stuck, age / flight)
 			placeCopy(parts, offsets, CFrame.lookAt(p, p + dir) * CFrame.Angles(0, 0, age * 30) * align)
@@ -1191,10 +1203,13 @@ local function crossWave(rec: ActionRec)
 	local dir = finish - origin
 	dir = Vector3.new(dir.X, 0, dir.Z)
 	local len = dir.Magnitude
-	if len < 1 then
-		return
+	local look = vrLook()
+	if len < 1 or (dir / math.max(len, 1e-3)):Dot(Vector3.new(look.X, 0, look.Z).Unit) < 0.3 then
+		-- the wave's end point has not replicated yet: send it straight ahead
+		dir = Vector3.new(look.X, 0, look.Z)
+		len = (c.WaveLength or 80) * S
 	end
-	dir = dir / len
+	dir = dir.Unit
 	local speed = (c.WaveSpeed or 130) * S
 	local travel = len / speed
 	local width = (c.WaveWidth or 9) * S
@@ -1463,13 +1478,14 @@ local function speedLines(): ScreenGui?
 	for i = 1, 28 do
 		local f = Instance.new("Frame")
 		f.Name = "Line"
-		f.AnchorPoint = Vector2.new(0, 0.5)
+		f.AnchorPoint = Vector2.new(0.5, 0.5)
 		f.Position = UDim2.fromScale(0.5, 0.5)
 		f.BorderSizePixel = 0
 		f.BackgroundColor3 = Color3.new(1, 1, 1)
 		f.BackgroundTransparency = 1
 		f.Rotation = (i / 28) * 360
 		f.Size = UDim2.new(0.6, 0, 0, 2)
+		f.Visible = false
 		f.Parent = gui
 	end
 	gui.Parent = pg
@@ -1493,9 +1509,17 @@ local function updateSpeedLines(amount: number, color: Color3)
 	for _, f in gui:GetChildren() do
 		if f:IsA("Frame") then
 			if math.random() < 0.3 then
-				local inner = 0.18 + math.random() * 0.12
-				f.Position = UDim2.fromScale(0.5 + math.cos(math.rad(f.Rotation)) * inner, 0.5 + math.sin(math.rad(f.Rotation)) * inner)
-				f.Size = UDim2.new(0.4 + math.random() * 0.4, 0, 0, 1 + math.random() * 3)
+				-- rotation pivots on the frame's centre, so the centre goes on the ray (in pixels, so
+				-- the lines stay radial on any aspect ratio)
+				local cam = workspace.CurrentCamera
+				local vp = if cam then cam.ViewportSize else Vector2.new(1280, 720)
+				local half = math.max(vp.X, vp.Y) * 0.5
+				local len = (0.4 + math.random() * 0.4) * half
+				local r = (0.36 + math.random() * 0.24) * half + len * 0.5
+				local a = math.rad(f.Rotation)
+				f.Position = UDim2.new(0.5, math.cos(a) * r, 0.5, math.sin(a) * r)
+				f.Size = UDim2.fromOffset(len, 1 + math.random() * 3)
+				f.Visible = true
 			end
 			f.BackgroundColor3 = color
 			f.BackgroundTransparency = 1 - screen.linesOn * (0.35 + 0.5 * math.random())
@@ -1914,7 +1938,7 @@ local function rootCorrection(now: number, dt: number): CFrame?
 		local rec = actions[i]
 		local path = rec.path
 		if path and #path >= 1 then
-			local tp = now - rec.start
+			local tp = math.min(now, rec.endAt or now) - rec.start
 			local t0, t1 = path[1].t, Motion.endTime(path)
 			if tp >= t0 - 0.02 and tp <= t1 + 0.6 then
 				local desired = Motion.cframe(path, tp)

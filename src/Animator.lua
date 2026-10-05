@@ -235,7 +235,7 @@ function Animator.new(desc, poses, config)
 	end
 
 	-- state
-	self.gait = { phase = 0, walkW = 0, run = 0, speed = 0, dir = Vector3.new(0, 0, -1), lastVel = V0, acc = V0, turn = 0, plant = { [1] = 0, [-1] = 0 } }
+	self.gait = { phase = 0, walkW = 0, run = 0, speed = 0, dir = Vector3.new(0, 0, -1), lastVel = V0, acc = V0, turn = 0, plant = { [1] = 0, [-1] = 0 }, prevQ = {} }
 	self.look = { yaw = 0, pitch = 0 }
 	self.spring = {
 		body = { x = V0, v = V0, f = 3.2, z = 0.35 },
@@ -602,7 +602,7 @@ function Animator:aimLayer()
 			local cur = chain.tip.rel.Position - chain.saber.rel.Position
 			if cur.Magnitude > 1e-5 then
 				cur = cur.Unit
-				local want = dirv.Unit
+				local want = (if self.inp.corr then self.inp.corr.Rotation * dirv else dirv).Unit
 				local axis = cur:Cross(want)
 				local ang = math.acos(math.clamp(cur:Dot(want), -1, 1))
 				if axis.Magnitude > 1e-6 and ang > 1e-4 then
@@ -677,14 +677,15 @@ function Animator:baseLayer(inp, baseW)
 	G.speed = speed
 
 	local w = G.walkW * baseW
-	local half = if cadence > 0.05 then math.min(speed * U / (4 * cadence), stepLen * 0.5) else 0
+	-- a planted foot slides back exactly as far as the body travels during the stance
+	local stanceFrac = lerp(0.58, 0.36, run)
+	local half = if cadence > 0.05 then math.min(speed * U * stanceFrac / (2 * cadence), stepLen * stanceFrac) else 0
 	half *= moving
 	local p = G.phase
 	local s1, c1 = math.sin(TAU * p), math.cos(TAU * p)
 	local s2, c2 = math.sin(2 * TAU * p), math.cos(2 * TAU * p)
 
 	-- feet: stance slides back under the body; swing tucks the heel up, then reaches forward
-	local stanceFrac = lerp(0.58, 0.36, run)
 	for _, side in { 1, -1 } do
 		local q = (p + (if side == 1 then 0 else 0.5)) % 1
 		local along, lift, pitch, back
@@ -705,7 +706,9 @@ function Animator:baseLayer(inp, baseW)
 		end
 		F.feet[side] += G.dir * (along * half * w) + Vector3.new(0, lift * w, 0) - G.dir * (back * w)
 		F.footPitch[side] += pitch * w
-		if q < 0.05 and clock - G.plant[side] > 0.22 and w > 0.4 then
+		local pq = G.prevQ[side]
+		G.prevQ[side] = q
+		if pq and q < pq and clock - G.plant[side] > 0.22 and w > 0.4 then
 			G.plant[side] = clock
 			self.spring.body.v += Vector3.new(0, -(0.7 + 1.5 * run) * w * U, 0)
 			self:emit("footstep", { side = side, run = run })
@@ -756,7 +759,7 @@ function Animator:baseLayer(inp, baseW)
 	self:rot("B_Chest", -1.2 * b, 0, 0, bw)
 	self:move("B_Chest", 0, 0.025 * b, 0, bw)
 	self:rot("B_ClavicleR", 0, 0, 1.5 * b, bw)
-	self:rot("B_ClavicleL", 0, 0, 1.5 * b, bw)
+	self:rot("B_ClavicleL", 0, 0, -1.5 * b, bw)
 	self:rot("B_Head", 0.6 * b, 0, 0, bw)
 	-- idle life: he is utterly composed; the blades turn a little in his fists
 	self:rot("B_Head", nz(clock * 0.13, 1.3) * 2, nz(clock * 0.1, 2.1) * 4, 0, idleW)
@@ -833,11 +836,33 @@ function Animator:legLayer(inp)
 	local F = self.F
 	local corr = inp.corr
 	local hipsYaw = self.acc.B_Hips.r.Y
+	local U, dt = self.U, math.max(self.dt, 1 / 240)
+	-- a foot that a pose moves across the floor steps instead of sliding: the faster foot lifts
+	local steps = self.footSteps
+	if not steps then
+		steps = {}
+		self.footSteps = steps
+	end
+	local hv = {}
+	for side in self.legs do
+		local st = steps[side]
+		if not st then
+			st = { prev = F.feet[side], lift = 0 }
+			steps[side] = st
+		end
+		local d = F.feet[side] - st.prev
+		st.prev = F.feet[side]
+		hv[side] = Vector3.new(d.X, 0, d.Z).Magnitude / dt
+	end
+	local still = 1 - self.gait.walkW
 	for side, leg in self.legs do
+		local st = steps[side]
+		local lead = if hv[side] >= (hv[-side] or 0) then 1 else 0.15
+		st.lift = approach(st.lift, math.clamp(hv[side] / U * 0.11, 0, 0.42) * U * lead * still, 16, dt)
 		local pitch = F.footPitch[side]
 		local toeLen = if leg.toe then (leg.toe.restRel.Position - leg.finish.restRel.Position).Magnitude else 0.9 * self.U
 		local roll = if pitch < 0 then toeLen * math.sin(-pitch) * 0.95 else toeLen * 0.42 * math.sin(pitch)
-		local target = leg.restAnkle + F.feet[side] + Vector3.new(0, roll, 0)
+		local target = leg.restAnkle + F.feet[side] + Vector3.new(0, roll + st.lift, 0)
 		if corr then
 			target = corr * target
 		end
@@ -847,7 +872,8 @@ function Animator:legLayer(inp)
 			pole = corr:VectorToWorldSpace(pole)
 		end
 		self:twoBone(leg, target, pole, 1)
-		local base = leg.lower.parent.rel * leg.lower.C0 * leg.lower.T
+		-- rebuilt from the new thigh T (twoBone does not refresh rel)
+		local base = leg.upper.parent.rel * leg.upper.C0 * leg.upper.T * leg.lower.C0 * leg.lower.T
 		-- foot: level with the ground, turned with the hips, pitched by the gait / pose
 		local yaw = hipsYaw * 0.8 + F.footYaw[side]
 		local want = CFrame.Angles(0, yaw, 0) * CFrame.Angles(F.footPitch[side], 0, 0) * leg.finish.restRel.Rotation
@@ -938,11 +964,14 @@ function Animator:clothLayer(inp)
 		cape.alive = false
 		return
 	end
+	-- rels already carry the path correction, so they map to world through the real root (W);
+	-- vr (root * correction) is what the body visibly does and drives the inherited motion
+	local W = if inp.corr then vr * inp.corr:Inverse() else vr
 	-- pinned top row follows the chest
 	local chestDelta = chest.rel * chest.restRel:Inverse()
 	local tops = {}
 	for c = 1, nc do
-		tops[c] = vr * (chestDelta * cape.rest[c][1])
+		tops[c] = W * (chestDelta * cape.rest[c][1])
 	end
 	local teleport = cape.lastVR and (cape.lastVR.Position - vr.Position).Magnitude > 12 * U
 	if not cape.alive or teleport then
@@ -951,11 +980,12 @@ function Animator:clothLayer(inp)
 			cape.p[c] = {}
 			cape.q[c] = {}
 			for r = 1, nr + 1 do
-				local w = vr * (chestDelta * cape.rest[c][r])
+				local w = W * (chestDelta * cape.rest[c][r])
 				cape.p[c][r] = w
 				cape.q[c][r] = w
 			end
 		end
+		cape.lastVR = vr
 	end
 	-- the cloth inherits most of the body's own movement (dashes and leaps would otherwise fling it
 	-- around like a flag in a hurricane); what is left over is the trailing motion you see
@@ -986,7 +1016,7 @@ function Animator:clothLayer(inp)
 	local function cap(a, b, r)
 		local A, Bb = self.bones[a], self.bones[b]
 		if A and Bb then
-			table.insert(caps, { vr * A.rel.Position, vr * Bb.rel.Position, r * U })
+			table.insert(caps, { W * A.rel.Position, W * Bb.rel.Position, r * U })
 		end
 	end
 	cap("B_Hips", "B_Chest", 1.05)
@@ -1066,7 +1096,7 @@ function Animator:clothLayer(inp)
 		end
 	end
 	-- bones from the simulated points (top down, so each parent is current)
-	local vrInv = vr:Inverse()
+	local vrInv = W:Inverse()
 	for c = 1, nc do
 		for r = 1, nr do
 			local rec = cape.cols[c][r]
@@ -1150,11 +1180,12 @@ ACT.RemoveEyepatch = {
 		local head = A.bones.B_Head
 		if patch and head then
 			-- the wrist stops a hand's length in front of the face, fist toward the patch
-			local target = patch.rel.Position + head.rel:VectorToWorldSpace(head.M * Vector3.new(-0.2, -0.32, -0.42)) * A.U
+			local onHead = (head.rel * head.restRel:Inverse() * patch.restRel).Position
+			local target = onHead + head.rel:VectorToWorldSpace(head.M * Vector3.new(-0.2, -0.32, -0.42)) * A.U
 			A.F.reach[-1] = { target = target, w = envelope(t, 0.12, tear - 0.4, tear - 0.02, tear + 0.18) * w, pole = Vector3.new(-1, -0.7, 0.2) }
 		end
 		local release = tear + 0.3
-		if t >= tear - 0.16 and t < release then
+		if t >= tear - 0.16 and t < release + 0.1 then
 			A.F.patch = { w = smooth(progress(tear - 0.16, tear - 0.06, t)) }
 		end
 		A.F.tremble = math.max(A.F.tremble, 0.7 * envelope(t, open - 0.85, open - 0.45, open - 0.04, open))

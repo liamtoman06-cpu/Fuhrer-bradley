@@ -220,6 +220,10 @@ if type(Config.TargetHeight) == "number" and Config.TargetHeight > 0 then
 		end)
 		if not ok then
 			warn("[Bradley] could not scale the model: " .. tostring(err))
+		else
+			-- ScaleTo scales about the pivot: put his feet back where they were placed
+			local newLo = heightRange()
+			model:PivotTo(model:GetPivot() + Vector3.new(0, lo - newLo, 0))
 		end
 	end
 end
@@ -1063,6 +1067,7 @@ local function doRemoveCape()
 		return
 	end
 	capeOff = true
+	pendingCape = false -- hits during the grab may have queued it again
 	model:SetAttribute("CapeOff", true)
 	if not waitUntil(start + cfg.Duration) then
 		return
@@ -1084,6 +1089,7 @@ local function doRemoveEyepatch()
 		return
 	end
 	eyeOpen = true
+	pendingEye = false -- hits during the tear may have queued it again
 	model:SetAttribute("Enraged", true)
 	model:SetAttribute("Subtitle", Config.EyeSubtitle)
 	-- the eye opens with a pressure wave (knockback is applied by each client)
@@ -1217,7 +1223,8 @@ local function doSaberThrow()
 	local start = beginAction("SaberThrow", if t then t.root.Position else frontPoint(), spd, if t then t.player else nil)
 	local at = clockOf(start, spd)
 	setFacing("target", TURN.windUp)
-	if not waitUntil(at(cfg.ReleaseAt) - 0.05) then
+	-- aimed a little before the release so the impact point replicates before clients throw
+	if not waitUntil(at(math.max(cfg.ReleaseAt - 0.2, 0))) then
 		return
 	end
 	refreshTarget()
@@ -1269,6 +1276,9 @@ local function doSaberThrow()
 			break
 		end
 		task.wait(1 / 30)
+	end
+	if not alive() then
+		return
 	end
 	local splash = cfg.SplashRadius * scale
 	for _, v in livingVictims() do
@@ -1390,6 +1400,12 @@ local function doThousandCuts()
 			hurt(v, cfg.TickDamage)
 		end)
 	end
+	-- publish where the wave will go before the cut, so every client has it when the wave starts
+	if not waitUntil(start + cfg.Final[1]) then
+		return
+	end
+	refreshRayFilter()
+	model:SetAttribute("ActionTarget", clampTravel(hrp.Position, hrp.Position + lookFlat() * (cfg.WaveLength * scale), 1))
 	if not waitUntil(start + cfg.FinalAt) then
 		return
 	end
