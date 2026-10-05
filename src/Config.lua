@@ -3,7 +3,8 @@
 	Every time below is in seconds from the start of the action (at normal speed).
 
 	Fight flow
-	  Phase 1  sabers drawn on first sight. Lunge, Cross Cut, Saber Throw, Tank Cleaver.
+	  Phase 1  on first sight he levels a saber at you (Challenge). Lunge, Cross Cut, Saber Throw,
+	           Tank Cleaver.
 	           At CapeHealth he tears off his cape ("Remove Cape").
 	  Phase 2  at EyeHealth he tears off the eyepatch and opens the Ultimate Eye ("Remove Eyepatch").
 	           Basic attacks run EyeSpeedBoost times faster and two eye abilities unlock:
@@ -17,6 +18,7 @@ local Config = {
 	Subtitle = "Wrath  ·  Führer of Amestris",
 	EyeSubtitle = "Wrath  ·  The Ultimate Eye",
 
+	TargetHeight = 9, -- the imported model is scaled to this many studs tall (nil = keep its size)
 	MaxHealth = 9000,
 	WalkSpeed = 12, -- walking pace (close range, returning home)
 	RunSpeed = 26, -- sprint toward targets farther than RunDistance
@@ -60,27 +62,16 @@ local Config = {
 	},
 
 	Actions = {
-		Draw = {
-			-- first sight: right hand to the left hip, left hand to the right hip, draw, flourish
-			Duration = 2.1,
-			Reach = { 0.0, 0.45 },
-			DrawAt = 0.5, -- blades leave the scabbards
-			Flourish = { 0.55, 1.45 },
-			Settle = { 1.45, 2.1 },
-		},
-		Sheathe = {
-			-- after a reset: both blades go home
-			Duration = 1.8,
-			Reach = { 0.0, 0.7 },
-			SheatheAt = 0.85,
-			Settle = { 0.95, 1.8 },
+		Challenge = {
+			-- first sight: levels the right saber at the target's throat, the cape stirs
+			Duration = 2.2,
 		},
 		RemoveCape = {
 			-- grabs the cape at the left shoulder, rips it off and flings it aside
 			Duration = 2.4,
-			Grab = { 0.0, 0.55 },
-			Rip = { 0.55, 0.9 },
-			ReleaseAt = 0.9,
+			Grab = { 0.0, 0.6 },
+			Rip = { 0.6, 0.95 },
+			ReleaseAt = 0.95,
 			Fling = { 0.9, 1.4 },
 			Settle = { 1.4, 2.4 },
 		},
@@ -196,6 +187,42 @@ local Config = {
 			Duration = 6.5,
 		},
 	},
+}
+
+-- Colours of the imported meshes, by the material at the end of each mesh name (Body_Skin -> Skin).
+-- { r, g, b, material?, reflectance? }
+Config.Colors = {
+	Skin = { 214, 166, 132 },
+	SkinShade = { 168, 116, 88 },
+	Lips = { 176, 112, 92 },
+	Crease = { 112, 66, 50 },
+	EyeWhite = { 236, 232, 222 },
+	Iris = { 64, 96, 134 },
+	IrisRim = { 18, 24, 34 },
+	Pupil = { 8, 8, 10 },
+	EyeGlint = { 255, 255, 255, "Neon" },
+	LashLine = { 14, 10, 8 },
+	OuroSclera = { 238, 206, 200 },
+	OuroSigil = { 200, 14, 28 },
+	Hair = { 16, 14, 14 },
+	Eyepatch = { 14, 14, 16 },
+	Shirt = { 26, 26, 32, "Fabric" },
+	ShirtRib = { 20, 20, 26, "Fabric" },
+	LeatherDark = { 58, 32, 20 },
+	LeatherBelt = { 110, 48, 22 },
+	Iron = { 168, 174, 184, "Metal" },
+	Brass = { 208, 156, 58, "Metal" },
+	Trousers = { 44, 86, 168, "Fabric" },
+	Glove = { 98, 56, 32 },
+	Boot = { 14, 14, 16, "SmoothPlastic", 0.05 },
+	Sole = { 36, 28, 22 },
+	Grip = { 22, 16, 12 },
+	Steel = { 224, 230, 238, "Metal", 0.2 },
+	Scabbard = { 18, 14, 12, "SmoothPlastic", 0.04 },
+	CoatBlue = { 30, 52, 128, "Fabric" },
+	CoatLining = { 20, 30, 74, "Fabric" },
+	Piping = { 234, 226, 204, "Fabric" },
+	Gold = { 214, 168, 58, "Metal" },
 }
 
 return Config

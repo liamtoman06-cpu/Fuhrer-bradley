@@ -9,7 +9,7 @@
 	  5. moves the root along scripted paths for dashes and leaps (module Motion),
 	  6. publishes what he is doing through model attributes so BossClient animates every client in
 	     sync: Action, ActionId, ActionStart, ActionSpeed, ActionTarget, ActionPath, ActionVictim,
-	     Drawn, CapeOff, EyeOpen, Enraged, RigReady,
+	     Combat, CapeOff, EyeOpen, Enraged, RigScale, RigReady,
 	  7. handles the phase changes (cape at CapeHealth, Ultimate Eye at EyeHealth), death and respawn.
 
 	Animation, VFX and the knockbacks are BossClient's job (players own their own physics).
@@ -39,10 +39,6 @@ local Cooldowns = Config.Cooldowns
 
 local humanoid = model:FindFirstChildOfClass("Humanoid")
 local hrp = model:FindFirstChild("HumanoidRootPart")
-if not humanoid or not (hrp and hrp:IsA("BasePart")) then
-	warn("[Bradley] the boss model needs a Humanoid and a HumanoidRootPart")
-	return
-end
 
 -- ---------------------------------------------------------------------------------------------
 -- Tuning that is not in Config (studs are multiplied by the model scale)
@@ -50,7 +46,6 @@ end
 local DEBUG = false
 local TEMPLATE_FOLDER = "KingBradleyTemplates"
 local WEAPON_HITBOXES = true -- invisible hitboxes parented to the model (player weapons find him)
-local HIP_HEIGHT = 4 -- HumanoidRootPart bottom is 4 studs above the soles
 
 local AI_TICK = 0.1
 local MOVE_REFRESH = 0.25
@@ -63,7 +58,6 @@ local HOME_RADIUS = 5
 local FALL_LIMIT = 80
 local ACTION_GAP = 0.45 -- breathing room between two actions (x0.6 in phase 2)
 local PROVOKE_TIME = 8
-local SHEATHE_AFTER = 8 -- seconds idle at home before he sheathes his sabers
 local HAND_OFFSET = Vector3.new(1.3, 1.6, -0.6) -- right hand at shoulder height (throws)
 
 local TURN = {
@@ -173,93 +167,146 @@ if canRespawn then
 	end
 end
 
+-- where he was placed (respawns go back exactly here, before any of the setup below)
+local placedPivot = model:GetPivot()
+
+-- ---------------------------------------------------------------------------------------------
+-- 2. Model setup: the imported, skinned King Bradley (any importer layout, any size)
+-- ---------------------------------------------------------------------------------------------
+local function bone(name: string): Bone?
+	local b = model:FindFirstChild(name, true)
+	return if b and b:IsA("Bone") then b else nil
+end
+
+local function visualParts(): { BasePart }
+	local list = {}
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" and d.Name ~= "Hitbox" then
+			table.insert(list, d)
+		end
+	end
+	return list
+end
+
+local function heightRange(): (number, number)
+	local lo, hi = math.huge, -math.huge
+	for _, p in visualParts() do
+		local cf, h = p.CFrame, p.Size / 2
+		for _, sx in { -1, 1 } do
+			for _, sy in { -1, 1 } do
+				for _, sz in { -1, 1 } do
+					local y = (cf * Vector3.new(h.X * sx, h.Y * sy, h.Z * sz)).Y
+					lo = math.min(lo, y)
+					hi = math.max(hi, y)
+				end
+			end
+		end
+	end
+	return lo, hi
+end
+
+for _, p in visualParts() do
+	p.Anchored = true -- held still while we measure and build
+end
+if hrp and hrp:IsA("BasePart") then
+	hrp.Anchored = true
+end
+if type(Config.TargetHeight) == "number" and Config.TargetHeight > 0 then
+	local lo, hi = heightRange()
+	local h = hi - lo
+	if h > 0.01 and math.abs(h - Config.TargetHeight) > 0.05 then
+		local ok, err = pcall(function()
+			model:ScaleTo(model:GetScale() * Config.TargetHeight / h)
+		end)
+		if not ok then
+			warn("[Bradley] could not scale the model: " .. tostring(err))
+		end
+	end
+end
+local groundY, topY = heightRange()
+local scale: number = math.max((topY - groundY) / 9, 0.05) -- one unit = one stud on a 9-stud Bradley
+
+local hipsBone, facingBone = bone("B_Hips"), bone("B_Facing")
+if not hipsBone then
+	warn("[Bradley] no B_Hips bone found: import KingBradley.fbx with its armature (see README)")
+end
+if not (hrp and hrp:IsA("BasePart")) then
+	local hipsPos = if hipsBone then hipsBone.WorldPosition else model:GetPivot().Position
+	local fwd = if facingBone and hipsBone then facingBone.WorldPosition - hipsBone.WorldPosition else model:GetPivot().LookVector
+	fwd = Vector3.new(fwd.X, 0, fwd.Z)
+	if fwd.Magnitude < 1e-3 then
+		fwd = Vector3.new(0, 0, -1)
+	end
+	local root = Instance.new("Part")
+	root.Name = "HumanoidRootPart"
+	root.Size = Vector3.new(2.2, 2, 1.2) * scale
+	root.CFrame = CFrame.lookAt(hipsPos, hipsPos + fwd.Unit)
+	root.Transparency = 1
+	root.CanCollide = true
+	root.Anchored = true
+	root.Parent = model
+	hrp = root
+end
+model.PrimaryPart = hrp
+if not humanoid then
+	humanoid = Instance.new("Humanoid")
+	humanoid.Parent = model
+end
+local hipHeight = math.max(hrp.Position.Y - hrp.Size.Y / 2 - groundY, 0.5)
+model:SetAttribute("RigScale", scale)
+
 local homeCF = model:GetPivot()
 local homePos = hrp.Position
 local homeYaw = yawOf(hrp.CFrame.LookVector) or 0
 
-local scale: number = 1
-do
-	local ok, s = pcall(function()
-		return model:GetScale()
-	end)
-	if ok and type(s) == "number" and s > 0 then
-		scale = s
+-- colours and materials by the material at the end of each mesh name
+local colors = Config.Colors or {}
+for _, p in visualParts() do
+	local key = string.match(p.Name, "_(%a+)%d*$") or string.match(p.Name, "_(%a+)%.%d+$")
+	local c = key and colors[key]
+	if c then
+		p.Color = Color3.fromRGB(c[1], c[2], c[3])
+		if c[4] then
+			local ok = pcall(function()
+				p.Material = Enum.Material[c[4]]
+			end)
+			if not ok then
+				p.Material = Enum.Material.SmoothPlastic
+			end
+		else
+			p.Material = Enum.Material.SmoothPlastic
+		end
+		p.Reflectance = c[5] or 0
 	end
 end
 
--- ---------------------------------------------------------------------------------------------
--- 2. Runtime rig
--- ---------------------------------------------------------------------------------------------
+-- physics: one assembly on the root; only the root collides; hitboxes take the weapon hits
 local rigParts: { BasePart } = {}
-local hitParts: { { any } } = {}
-local motorCount: number, weldCount: number = 0, 0
-
-local function isBoneName(name: string): boolean
-	return string.sub(name, 1, 2) == "B_"
-end
-
-local function weldTo(bone: BasePart, part: BasePart)
+local weldCount = 0
+local function weldTo(part: BasePart)
 	local weld = Instance.new("WeldConstraint")
-	weld.Name = "BoneWeld"
-	weld.Part0 = bone
+	weld.Name = "BossWeld"
+	weld.Part0 = hrp
 	weld.Part1 = part
 	weld.Parent = part
 	weldCount += 1
 end
-
-local function buildBone(bone: BasePart, parentBone: BasePart?)
-	table.insert(rigParts, bone)
-	if parentBone then
-		local old = bone:FindFirstChild(bone.Name)
-		if old and old:IsA("JointInstance") then
-			old:Destroy()
-		end
-		local motor = Instance.new("Motor6D")
-		motor.Name = bone.Name
-		motor.Part0 = parentBone
-		motor.Part1 = bone
-		motor.C0 = parentBone.CFrame:Inverse() * bone.CFrame
-		motor.C1 = CFrame.identity
-		motor.Parent = bone
-		motorCount += 1
-	end
-	local function visit(container: Instance)
-		for _, child in container:GetChildren() do
-			if child:IsA("BasePart") then
-				if isBoneName(child.Name) then
-					buildBone(child, bone)
-				else
-					weldTo(bone, child)
-					table.insert(rigParts, child)
-					if child.CanQuery and child.CanTouch then
-						table.insert(hitParts, { child, bone })
-					end
-					visit(child)
-				end
-			elseif child:IsA("Folder") or child:IsA("Model") then
-				visit(child)
-			end
-		end
-	end
-	visit(bone)
+for _, p in visualParts() do
+	weldTo(p)
+	p.CanCollide = false
+	p.CanTouch = false
+	p.CanQuery = false
+	p.Massless = true
+	p.CastShadow = true
+	table.insert(rigParts, p)
 end
 
--- Weapon hitboxes: invisible, slightly larger copies of the body parts, direct children of the
--- model (so `hit.Parent:FindFirstChildOfClass("Humanoid")` finds the boss), welded to the bone.
-local function buildHitbox(part: BasePart, bone: BasePart)
-	local size = part.Size
-	local mesh = part:FindFirstChildOfClass("SpecialMesh")
-	local shape = if part:IsA("Part") then part.Shape else Enum.PartType.Block
-	local round = false
-	if mesh then
-		size = size * mesh.Scale
-		round = mesh.MeshType == Enum.MeshType.Sphere
-	elseif shape == Enum.PartType.Ball then
-		round = true
-	end
-
+local function hitbox(name: string, cf: CFrame, size: Vector3, shape: Enum.PartType?)
 	local box = Instance.new("Part")
 	box.Name = "Hitbox"
+	box.Shape = shape or Enum.PartType.Block
+	box.Size = size
+	box.CFrame = cf
 	box.Transparency = 1
 	box.Anchored = true
 	box.CanCollide = false
@@ -267,45 +314,26 @@ local function buildHitbox(part: BasePart, bone: BasePart)
 	box.CanQuery = true
 	box.CastShadow = false
 	box.Massless = true
-	box.TopSurface = Enum.SurfaceType.Smooth
-	box.BottomSurface = Enum.SurfaceType.Smooth
-
-	local pad = 1.06
-	local cf = part.CFrame
-	if round then
-		local x, y, z = size.X, size.Y, size.Z
-		local long, short = math.max(x, y, z), math.min(x, y, z)
-		if long <= short * 1.3 then
-			box.Shape = Enum.PartType.Ball
-			box.Size = Vector3.one * (long * pad)
-		else
-			box.Shape = Enum.PartType.Cylinder
-			if long == x then
-				local d = math.max(y, z)
-				box.Size = Vector3.new(x, d, d) * pad
-			elseif long == y then
-				local d = math.max(x, z)
-				cf = cf * CFrame.Angles(0, 0, math.pi / 2)
-				box.Size = Vector3.new(y, d, d) * pad
-			else
-				local d = math.max(x, y)
-				cf = cf * CFrame.Angles(0, math.pi / 2, 0)
-				box.Size = Vector3.new(z, d, d) * pad
-			end
-		end
-	elseif shape == Enum.PartType.Cylinder then
-		box.Shape = Enum.PartType.Cylinder
-		box.Size = size * pad
-	else
-		box.Size = size * pad
-	end
-	box.CFrame = cf
 	box:SetAttribute("Hitbox", true)
-	box:SetAttribute("Bone", bone.Name)
+	box:SetAttribute("Region", name)
 	box.Parent = model
-	weldTo(bone, box)
+	weldTo(box)
 	table.insert(rigParts, box)
-	part.CanTouch = false
+end
+if WEAPON_HITBOXES then
+	local up = hrp.CFrame.Rotation
+	local function at(b: Bone?, fallback: Vector3): Vector3
+		return if b then b.WorldPosition else hrp.CFrame:PointToWorldSpace(fallback * scale)
+	end
+	local hips, neck, head = at(hipsBone, Vector3.zero), at(bone("B_Neck"), Vector3.new(0, 2.7, 0)), at(bone("B_Head"), Vector3.new(0, 3.1, 0))
+	hitbox("Torso", CFrame.new((hips + neck) / 2) * up, Vector3.new(2.0 * scale, (neck - hips).Magnitude + 0.6 * scale, 1.2 * scale))
+	hitbox("Head", CFrame.new(head + Vector3.new(0, 0.45 * scale, 0)) * up, Vector3.one * 1.25 * scale, Enum.PartType.Ball)
+	for _, n in { "L", "R" } do
+		local a, b = at(bone("B_Thigh" .. n), Vector3.zero), at(bone("B_Foot" .. n), Vector3.new(0, -4, 0))
+		hitbox("Leg" .. n, CFrame.new((a + b) / 2) * up, Vector3.new(0.85 * scale, (a - b).Magnitude + 0.4 * scale, 0.85 * scale))
+		local s0, e0 = at(bone("B_UpperArm" .. n), Vector3.zero), at(bone("B_Hand" .. n), Vector3.zero)
+		hitbox("Arm" .. n, CFrame.lookAt((s0 + e0) / 2, e0) , Vector3.new(0.7 * scale, 0.7 * scale, (s0 - e0).Magnitude))
+	end
 end
 
 local function claimNetworkOwnership()
@@ -320,7 +348,7 @@ end
 
 local function removeAnimator(inst: Instance)
 	if inst:IsA("Animator") then
-		-- An Animator would overwrite Motor6D.Transform; BossClient animates the motors itself.
+		-- An Animator would overwrite Bone.Transform; BossClient animates the bones itself.
 		task.defer(function()
 			if inst.Parent then
 				inst:Destroy()
@@ -329,18 +357,12 @@ local function removeAnimator(inst: Instance)
 	end
 end
 
-buildBone(hrp, nil)
-if WEAPON_HITBOXES then
-	for _, entry in hitParts do
-		buildHitbox(entry[1], entry[2])
-	end
-end
-
 for _, part in rigParts do
 	part.Anchored = false
-	part.CanCollide = part == hrp
-	part.Massless = part ~= hrp
 end
+hrp.Anchored = false
+hrp.CanCollide = true
+hrp.Massless = false
 hrp.RootPriority = 127
 hrp.CustomPhysicalProperties = PhysicalProperties.new(4, 0.4, 0, 1, 1)
 
@@ -348,7 +370,7 @@ if humanoid.RigType ~= Enum.HumanoidRigType.R15 then
 	humanoid.RigType = Enum.HumanoidRigType.R15 -- R15 is the rig type that honours HipHeight
 end
 humanoid.AutomaticScalingEnabled = false
-humanoid.HipHeight = HIP_HEIGHT * scale
+humanoid.HipHeight = hipHeight
 humanoid.MaxHealth = Config.MaxHealth
 humanoid.Health = Config.MaxHealth
 humanoid.WalkSpeed = Config.WalkSpeed
@@ -384,7 +406,7 @@ align.Parent = hrp
 
 local actionId = 0
 model:SetAttribute("Enraged", false)
-model:SetAttribute("Drawn", false)
+model:SetAttribute("Combat", false)
 model:SetAttribute("CapeOff", false)
 model:SetAttribute("EyeOpen", false)
 model:SetAttribute("ActionPath", "")
@@ -413,7 +435,7 @@ do
 end
 
 model:SetAttribute("RigReady", true)
-log(string.format("rig ready: %d motors, %d welds, %d hitboxes, scale %.2f", motorCount, weldCount, #hitParts, scale))
+log(string.format("rig ready: %d welds, scale %.2f, hip height %.2f", weldCount, scale, hipHeight))
 
 -- ---------------------------------------------------------------------------------------------
 -- Players (the only things he ever hurts)
@@ -495,7 +517,7 @@ local dead = false
 local inAction = false
 local eyeOpen = false -- phase 2 (the Ultimate Eye)
 local capeOff = false
-local drawn = false
+local challenged = false
 local mode = "Idle" -- "Idle" (at home), "Combat", "Return"
 local target: Victim? = nil
 local lastSeenTarget = 0
@@ -505,7 +527,6 @@ local combatStart = 0
 local returnStart = 0
 local nextActionAt = 0
 local provokedUntil = 0
-local idleSince = os.clock()
 local pendingCape = false
 local pendingEye = false
 local cdUntil: { [string]: number } = {}
@@ -1018,32 +1039,13 @@ local function frontalHits(pos: Vector3, look: Vector3, range: number, arcDeg: n
 	end
 end
 
--- ---- Draw / Sheathe ---------------------------------------------------------------------------
-local function doDraw()
-	local cfg = Actions.Draw
+-- ---- Challenge: first sight, the blade levelled at the target ---------------------------------
+local function doChallenge()
+	local cfg = Actions.Challenge
+	challenged = true
 	local t = target
-	local start = beginAction("Draw", if t then t.root.Position else frontPoint(), 1)
+	local start = beginAction("Challenge", if t then t.root.Position else frontPoint(), 1, if t then t.player else nil)
 	setFacing(if t then "target" else "hold", TURN.slow)
-	if not waitUntil(start + cfg.DrawAt) then
-		return
-	end
-	drawn = true
-	model:SetAttribute("Drawn", true)
-	if not waitUntil(start + cfg.Duration) then
-		return
-	end
-	endAction()
-end
-
-local function doSheathe()
-	local cfg = Actions.Sheathe
-	local start = beginAction("Sheathe", frontPoint(), 1)
-	setFacing("hold")
-	if not waitUntil(start + cfg.SheatheAt) then
-		return
-	end
-	drawn = false
-	model:SetAttribute("Drawn", false)
 	if not waitUntil(start + cfg.Duration) then
 		return
 	end
@@ -1534,6 +1536,7 @@ local function resetBoss()
 	humanoid.Health = humanoid.MaxHealth
 	pendingCape = false
 	pendingEye = false
+	challenged = false
 	if capeOff or eyeOpen then
 		capeOff = false
 		eyeOpen = false
@@ -1596,7 +1599,7 @@ local function deathSequence()
 		if brain and brain:IsA("BaseScript") then
 			brain.Enabled = true
 		end
-		fresh:PivotTo(homeCF)
+		fresh:PivotTo(placedPivot)
 		fresh.Parent = parent
 	end
 	model:Destroy()
@@ -1636,6 +1639,7 @@ end
 local function startReturn()
 	log("returning home")
 	mode = "Return"
+	model:SetAttribute("Combat", false)
 	returnStart = os.clock()
 	target = nil
 	setFacing("none")
@@ -1720,8 +1724,8 @@ local function combatStep(v: Victim, clock: number)
 	local dist = flatDist(hrp.Position, rootPos)
 
 	if clock >= nextActionAt then
-		if not drawn then
-			doDraw()
+		if not challenged then
+			doChallenge()
 			return
 		end
 		if pendingCape then
@@ -1769,7 +1773,7 @@ local function think()
 			stopMoving()
 			resetBoss()
 			mode = "Idle"
-			idleSince = clock
+			model:SetAttribute("Combat", false)
 			setFacing("yaw", TURN.home, homeYaw)
 		else
 			setFacing("none")
@@ -1796,6 +1800,7 @@ local function think()
 		if mode ~= "Combat" then
 			mode = "Combat"
 			combatStart = clock
+			model:SetAttribute("Combat", true)
 			log("aggro", v.player.Name)
 		end
 		combatStep(v, clock)
@@ -1805,7 +1810,7 @@ local function think()
 	if mode == "Combat" then
 		if clock - lastSeenTarget > LOST_TARGET_RESET then
 			mode = "Idle"
-			idleSince = clock
+			model:SetAttribute("Combat", false)
 			if flatDist(hrp.Position, homePos) > HOME_RADIUS * scale then
 				startReturn()
 			else
@@ -1825,7 +1830,7 @@ local function think()
 		return
 	end
 
-	-- Idle at home: stands at attention; puts his sabers away after a while.
+	-- Idle at home: stands at ease.
 	if flatDist(hrp.Position, homePos) > HOME_RADIUS * scale then
 		startReturn()
 		return
@@ -1833,9 +1838,6 @@ local function think()
 	stopMoving()
 	if face.mode == "none" then
 		setFacing("yaw", TURN.home, homeYaw)
-	end
-	if drawn and clock - idleSince > SHEATHE_AFTER and clock >= nextActionAt then
-		doSheathe()
 	end
 end
 

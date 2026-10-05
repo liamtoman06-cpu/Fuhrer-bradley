@@ -1,33 +1,27 @@
 --!nonstrict
 --[[
-	King Bradley boss - client: every animation, every visual effect, the local player's knockback,
-	camera shake, screen effects, the anime outline and the boss health bar.
+	King Bradley boss - client: animation (through the Animator module), visual effects, the local
+	player's knockback, camera shake, screen effects, the anime outline and the boss health bar.
 
-	A Script (RunContext = Client) that sits directly inside the KingBradley model, so every player
-	runs their own copy (each respawned boss runs a fresh one).
+	A Script (RunContext = Client) that sits directly inside the boss model, so every player runs their
+	own copy (each respawned boss runs a fresh one).
 
 	Contract with BossServer:
-	  * the server builds a Motor6D per B_* bone (Part0 = parent bone, C0 = rest offset, C1 = identity)
-	    and then sets the model attribute RigReady = true;
-	  * Motor6D.Transform is set here every frame (RunService.PreSimulation) and is never replicated;
+	  * the boss is the imported, skinned model: Bone instances named B_* drive the meshes. The server
+	    welds everything to the HumanoidRootPart and sets RigReady; this script writes Bone.Transform
+	    every frame (PreSimulation). Transforms are local and never replicated: smooth and free.
 	  * actions arrive as attributes (Action, ActionId, ActionStart, ActionSpeed, ActionTarget,
 	    ActionPath, ActionVictim). Time into an action = (GetServerTimeNow() - ActionStart) * ActionSpeed
-	    and its phases come from Config.Actions, so every client shows the same moment of the same cut;
-	  * dashes and leaps follow ActionPath (module Motion): the body is drawn exactly on the path,
-	    which keeps them smooth whatever the network does;
-	  * Drawn / CapeOff / EyeOpen / Enraged describe the persistent state (late joiners see it right).
+	    and its phases come from Config.Actions, so every client shows the same moment of the same cut.
+	  * dashes and leaps follow ActionPath (module Motion): the body is drawn exactly on the path.
+	  * Combat / CapeOff / EyeOpen / Enraged describe the persistent state (late joiners see it right).
 
-	Layout of this file:
-	   1. services, guards, config            7. visual effects library
-	   2. pure math                           8. actions (one block per move)
-	   3. rig discovery                       9. local player: knockback, shake, screen
-	   4. poses, FK, leg IK, arm IK          10. outline, hit flash, boss bar
-	   5. base layer: stances, walk, run     11. frame loop
-	   6. cape cloth, eyelid, prop groups    12. lifecycle and cleanup
+	Layout: 1. setup  2. rig  3. effects library  4. action effects  5. local player
+	        6. outline and boss bar  7. frame loop  8. lifecycle
 ]]
 
 -- =============================================================================================
--- 1. Services, guards, config
+-- 1. Setup
 -- =============================================================================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -38,7 +32,6 @@ if not (model and model:IsA("Model")) then
 	warn("[Bradley] BossClient must be a direct child of the boss Model")
 	return
 end
-
 while not model:IsDescendantOf(workspace) do
 	model.AncestryChanged:Wait()
 end
@@ -64,9 +57,10 @@ end
 
 local Config = requireChild("Config") or { Actions = {}, Sounds = {} }
 local Motion = requireChild("Motion")
+local Animator = requireChild("Animator")
 local Poses = requireChild("Poses") or {}
-if not Motion then
-	warn("[Bradley] BossClient needs the Motion module")
+if not (Motion and Animator) then
+	warn("[Bradley] BossClient needs the Motion and Animator modules")
 	return
 end
 
@@ -76,126 +70,18 @@ local function cfgAction(name: string)
 end
 
 local localPlayer = Players.LocalPlayer
-
--- =============================================================================================
--- 2. Pure math
--- =============================================================================================
+local AM = Animator.math
+local clamp01, progress, smooth, smoother, easeOut, envelope, approach = AM.clamp01, AM.progress, AM.smooth, AM.smoother, AM.easeOut, AM.envelope, AM.approach
+local function noise(t: number, seed: number): number
+	return math.clamp(math.noise(t, seed, 0.37) * 2, -1, 1)
+end
 local TAU = math.pi * 2
 local RAD = math.pi / 180
 local V0 = Vector3.zero
 local I = CFrame.identity
 
-local function clamp01(x: number): number
-	return if x < 0 then 0 elseif x > 1 then 1 else x
-end
-
-local function lerp(a: number, b: number, t: number): number
-	return a + (b - a) * t
-end
-
-local function progress(a: number, b: number, x: number): number
-	if b <= a then
-		return if x >= b then 1 else 0
-	end
-	return clamp01((x - a) / (b - a))
-end
-
-local function smooth(t: number): number
-	t = clamp01(t)
-	return t * t * (3 - 2 * t)
-end
-
-local function smoother(t: number): number
-	t = clamp01(t)
-	return t * t * t * (t * (t * 6 - 15) + 10)
-end
-
-local function easeOut(t: number, p: number?): number
-	return 1 - (1 - clamp01(t)) ^ (p or 3)
-end
-
-local function easeIn(t: number, p: number?): number
-	return clamp01(t) ^ (p or 3)
-end
-
--- Rises over [a, b], holds, falls over [c, d].
-local function envelope(t: number, a: number, b: number, c: number, d: number): number
-	return smooth(progress(a, b, t)) * (1 - smooth(progress(c, d, t)))
-end
-
-local function approach(current: number, target: number, rate: number, dt: number): number
-	return target + (current - target) * math.exp(-rate * dt)
-end
-
-local function noise(t: number, seed: number): number
-	return math.clamp(math.noise(t, seed, 0.37) * 2, -1, 1)
-end
-
--- Pose interpolation (axis-angle, works for t outside [0, 1]).
-local function blendPose(a: CFrame, b: CFrame, t: number): CFrame
-	if t <= 0 then
-		return a
-	elseif t >= 1 then
-		return b
-	end
-	local pos = a.Position + (b.Position - a.Position) * t
-	local axis, angle = (a.Rotation:Inverse() * b.Rotation):ToAxisAngle()
-	if angle ~= angle or math.abs(angle) < 1e-6 or axis.Magnitude < 1e-6 then
-		return CFrame.new(pos) * a.Rotation
-	end
-	return CFrame.new(pos) * a.Rotation * CFrame.fromAxisAngle(axis, angle * t)
-end
-
-type Spring = { x: Vector3, v: Vector3, f: number, z: number }
-
-local function newSpring(freq: number, zeta: number): Spring
-	return { x = V0, v = V0, f = freq, z = zeta }
-end
-
-local function stepSpring(s: Spring, target: Vector3, dt: number): Vector3
-	local w = TAU * s.f
-	local k, c = w * w, 2 * s.z * w
-	local n = math.max(1, math.ceil(dt * 240))
-	local h = dt / n
-	local x, v = s.x, s.v
-	for _ = 1, n do
-		v += ((target - x) * k - v * c) * h
-		x += v * h
-	end
-	s.x, s.v = x, v
-	return x
-end
-
--- Two-bone planar leg IK in the hips frame (knee hinge about X).
-local function solveLegIK(leg, d: Vector3)
-	local L1, L2 = leg.L1, leg.L2
-	local dy, dz = d.Y, d.Z
-	local D = math.sqrt(dy * dy + dz * dz)
-	D = math.clamp(D, math.abs(L1 - L2) + 0.05, (L1 + L2) * 0.9995)
-	local phiD = math.atan2(-dz, -dy)
-	local alpha = math.acos(math.clamp((L1 * L1 + D * D - L2 * L2) / (2 * L1 * D), -1, 1))
-	local beta = math.acos(math.clamp((L2 * L2 + D * D - L1 * L1) / (2 * L2 * D), -1, 1))
-	local phi1 = phiD + alpha
-	local phi2 = phiD - beta
-	local thigh = phi1 - leg.a1
-	local shin = phi2 - phi1 + leg.a1 - leg.a2
-	local roll = math.clamp(math.atan2(d.X - leg.dx, D), -0.45, 0.45)
-	return thigh, shin, roll, phi2 - leg.a2
-end
-
-local function frameFrom(x: Vector3, y: Vector3): CFrame
-	x = x.Unit
-	local z = x:Cross(y)
-	if z.Magnitude < 1e-5 then
-		z = x:Cross(if math.abs(x.Y) < 0.9 then Vector3.yAxis else Vector3.xAxis)
-	end
-	z = z.Unit
-	y = z:Cross(x)
-	return CFrame.fromMatrix(V0, x, y, z)
-end
-
 -- =============================================================================================
--- 3. Rig discovery
+-- 2. Rig
 -- =============================================================================================
 while not model:GetAttribute("RigReady") do
 	if not model:IsDescendantOf(workspace) then
@@ -203,745 +89,83 @@ while not model:GetAttribute("RigReady") do
 	end
 	task.wait(0.2)
 end
-
 local hrp = model:WaitForChild("HumanoidRootPart", 10)
 if not (hrp and hrp:IsA("BasePart")) then
 	warn("[Bradley] BossClient: the model has no HumanoidRootPart")
 	return
 end
 local humanoid = model:FindFirstChildOfClass("Humanoid")
+local S = model:GetAttribute("RigScale")
+S = if type(S) == "number" and S > 0 then S else 1
 
-local S = 1
+-- every Bone of the imported rig (top-level bones are folded onto the root part's frame)
+local boneObjs: { [string]: Bone } = {}
+local desc = { bones = {}, holder = I }
 do
-	local ok, s = pcall(function()
-		return model:GetScale()
-	end)
-	if ok and type(s) == "number" and s > 0 then
-		S = s
-	end
-end
-
-type BoneRec = {
-	name: string,
-	part: BasePart,
-	motor: Motor6D?,
-	parent: any,
-	C0: CFrame,
-	C0inv: CFrame,
-	restRel: CFrame,
-	rel: CFrame,
-	T: CFrame,
-	dirty: boolean,
-}
-
-local bones: { [string]: BoneRec } = {}
-local boneList: { BoneRec } = {}
-
-local function isBoneName(name: string): boolean
-	return string.sub(name, 1, 2) == "B_"
-end
-
-local function discoverBones(): number
-	table.clear(bones)
-	table.clear(boneList)
-	bones.HumanoidRootPart = {
-		name = "HumanoidRootPart",
-		part = hrp,
-		motor = nil,
-		parent = nil,
-		C0 = I,
-		C0inv = I,
-		restRel = I,
-		rel = I,
-		T = I,
-		dirty = false,
-	}
-	local pending = {}
 	for _, d in model:GetDescendants() do
-		if d:IsA("Motor6D") then
-			local p0, p1 = d.Part0, d.Part1
-			if p0 and p1 and p1.Name == d.Name and isBoneName(d.Name) then
-				pending[d.Name] = d
-			end
+		if d:IsA("Bone") then
+			boneObjs[d.Name] = d
 		end
 	end
-	local grew = true
-	while grew do
-		grew = false
-		for name, motor in pending do
-			local parent = bones[motor.Part0.Name]
-			if parent and parent.part == motor.Part0 then
-				local c0 = motor.C0
-				bones[name] = {
-					name = name,
-					part = motor.Part1,
-					motor = motor,
-					parent = parent,
-					C0 = c0,
-					C0inv = c0:Inverse(),
-					restRel = parent.restRel * c0,
-					rel = parent.restRel * c0,
-					T = I,
-					dirty = false,
-				}
-				table.insert(boneList, bones[name])
-				pending[name] = nil
-				grew = true
-			end
+	for name, b in boneObjs do
+		local parent = b.Parent
+		if parent and parent:IsA("Bone") then
+			table.insert(desc.bones, { name = name, parent = parent.Name, rest = b.CFrame })
+		elseif parent and parent:IsA("BasePart") then
+			table.insert(desc.bones, { name = name, rest = hrp.CFrame:ToObjectSpace(parent.CFrame) * b.CFrame })
 		end
 	end
-	return #boneList
 end
-
-do
-	local expected = 0
-	for _, d in model:GetDescendants() do
-		if d:IsA("BasePart") and isBoneName(d.Name) then
-			expected += 1
-		end
-	end
-	local deadline = os.clock() + 6
-	while discoverBones() < expected and os.clock() < deadline and model.Parent do
-		task.wait(0.25)
-	end
-	log(("found %d/%d motors"):format(#boneList, expected))
-end
-
-if not bones.B_Hips then
-	warn("[Bradley] BossClient: no B_Hips motor found, animation disabled")
+if not boneObjs.B_Hips then
+	warn("[Bradley] BossClient: no B_Hips bone; import KingBradley.fbx with its armature (see README)")
 	return
 end
-
-local function attachmentOn(rec: BoneRec?, name: string): CFrame?
-	if not rec then
-		return nil
-	end
-	local a = rec.part:FindFirstChild(name)
-	if a and a:IsA("Attachment") then
-		return a.CFrame
-	end
-	return nil
+local anim = Animator.new(desc, Poses, Config)
+local animBones: { { Bone } } = {}
+for name, b in boneObjs do
+	table.insert(animBones, { b, name })
 end
+log(("%d bones, unit %.2f"):format(#desc.bones, anim.U))
 
--- Legs
-type Leg = { side: number, thigh: BoneRec, shin: BoneRec, foot: BoneRec, pivot: Vector3, L1: number, L2: number, a1: number, a2: number, dx: number, restAnkle: Vector3 }
-local legs: { Leg } = {}
-for _, info in { { "R", 1 }, { "L", -1 } } do
-	local thigh, shin, foot = bones["B_Thigh" .. info[1]], bones["B_Shin" .. info[1]], bones["B_Foot" .. info[1]]
-	if thigh and shin and foot and thigh.parent == bones.B_Hips then
-		local v1 = thigh.C0:VectorToWorldSpace(shin.C0.Position)
-		local v2 = (thigh.C0 * shin.C0):VectorToWorldSpace(foot.C0.Position)
-		table.insert(legs, {
-			side = info[2],
-			thigh = thigh,
-			shin = shin,
-			foot = foot,
-			pivot = thigh.C0.Position,
-			L1 = math.max(math.sqrt(v1.Y * v1.Y + v1.Z * v1.Z), 0.1),
-			L2 = math.max(math.sqrt(v2.Y * v2.Y + v2.Z * v2.Z), 0.1),
-			a1 = math.atan2(-v1.Z, -v1.Y),
-			a2 = math.atan2(-v2.Z, -v2.Y),
-			dx = v1.X + v2.X,
-			restAnkle = foot.restRel.Position,
-		})
-	end
-end
-
--- Arms
-local ARM = {
-	[1] = { sh = bones.B_ShoulderR, el = bones.B_ElbowR, ha = bones.B_HandR, sb = bones.B_SaberR, n = "R" },
-	[-1] = { sh = bones.B_ShoulderL, el = bones.B_ElbowL, ha = bones.B_HandL, sb = bones.B_SaberL, n = "L" },
-}
-local ARM_NAMES = {
-	[1] = { "B_ShoulderR", "B_ElbowR", "B_HandR", "B_SaberR" },
-	[-1] = { "B_ShoulderL", "B_ElbowL", "B_HandL", "B_SaberL" },
-}
-
--- Cape rows (B_Cape1 = top .. B_CapeN = hem)
-local capeRows: { BoneRec } = {}
-for i = 1, 8 do
-	local rec = bones["B_Cape" .. i]
-	if not rec then
-		break
-	end
-	capeRows[i] = rec
-end
-
-local headRec, chestRec, hipsRec = bones.B_Head, bones.B_Chest, bones.B_Hips
-local patchRec, lidRec = bones.B_Patch, bones.B_UltLid
-
--- Points the scripts reach for (all fixed to a bone)
-local POINTS = {
-	hiltR = { hipsRec, attachmentOn(hipsRec, "HiltGripR") },
-	hiltL = { hipsRec, attachmentOn(hipsRec, "HiltGripL") },
-	spareL = { hipsRec, attachmentOn(hipsRec, "SpareGrip3") },
-	eye = { headRec, attachmentOn(headRec, "UltimateEyeAttachment") },
-	mouth = { headRec, attachmentOn(headRec, "MouthCenter") },
-	chest = { chestRec, attachmentOn(chestRec, "ChestCenter") },
-}
-local function point(name: string): Vector3?
-	local p = POINTS[name]
-	if p and p[1] and p[2] then
-		return (p[1].rel * p[2]).Position
-	end
-	return nil
-end
-
--- The left cape clasp (what the right hand grabs) and the patch, in their bones' space.
-local claspLocal: CFrame? = nil
-do
-	local clasp = model:FindFirstChild("Cape_ClaspL", true)
-	if clasp and clasp:IsA("BasePart") and chestRec then
-		claspLocal = chestRec.part.CFrame:ToObjectSpace(clasp.CFrame)
-	end
-end
-
--- Prop groups: parts whose name starts with Group_ (toggled with LocalTransparencyModifier).
-local GROUP_NAMES = { "SaberR", "SaberL", "HiltR", "HiltL", "Spare1", "Spare2", "Spare3", "Spare4", "Cape", "Patch" }
+-- prop groups (MeshParts named Group_Material), hidden with LocalTransparencyModifier
+local GROUP_NAMES = { "SaberR", "SaberL", "Spare1", "Spare2", "Spare3", "Spare4", "Cape", "Patch" }
 local groupParts: { [string]: { BasePart } } = {}
 for _, g in GROUP_NAMES do
 	groupParts[g] = {}
 end
 local allVisualParts: { BasePart } = {}
 for _, d in model:GetDescendants() do
-	if d:IsA("BasePart") and d ~= hrp and not isBoneName(d.Name) and d.Name ~= "Hitbox" then
+	if d:IsA("BasePart") and d ~= hrp and d.Name ~= "Hitbox" then
 		table.insert(allVisualParts, d)
 		local g = string.match(d.Name, "^(%a+%d?)_")
 		if g and groupParts[g] then
 			table.insert(groupParts[g], d)
-			if (g == "HiltR" or g == "HiltL") and d.Transparency >= 0.99 then
-				d.Transparency = 0 -- sheathed hilts ship hidden; this client shows them when sheathed
-				d.LocalTransparencyModifier = 1
-			end
 		end
 	end
+end
+local spareNames = {}
+for _, g in { "Spare1", "Spare2", "Spare3", "Spare4" } do
+	if #groupParts[g] > 0 then
+		table.insert(spareNames, g)
+	end
+end
+
+-- world positions of bones this frame (the Animator's rels already include the path correction)
+local function bonePos(name: string): Vector3
+	return hrp.CFrame * anim:pos(name)
+end
+local function boneCF(name: string): CFrame
+	return hrp.CFrame * anim:relOf(name)
 end
 
 -- =============================================================================================
--- 4. Poses, FK, leg IK, arm IK
+-- 3. Effects library
 -- =============================================================================================
-local BODY = {
-	"B_Hips", "B_Spine", "B_Chest", "B_Neck", "B_Head",
-	"B_ShoulderR", "B_ElbowR", "B_HandR", "B_SaberR",
-	"B_ShoulderL", "B_ElbowL", "B_HandL", "B_SaberL",
-}
-local rotAcc: { [string]: Vector3 } = {}
-local posAcc: { [string]: Vector3 } = {}
-
--- Everything else one frame of animation decides.
-local F = {
-	feet = { [1] = V0, [-1] = V0 },
-	footPitch = { [1] = 0, [-1] = 0 },
-	look = nil :: Vector3?,
-	lookW = 0,
-	suppress = 0,
-	reach = { [1] = nil :: any, [-1] = nil :: any }, -- { target = Vector3 (root space), w, pole }
-	corr = I, -- visual root correction (scripted paths)
-	patch = nil :: any, -- eyepatch follow { w }
-	capeBoost = V0, -- extra cape swing (x = back flare, z = side)
-	lid = 0, -- Ultimate Eye lid (0 closed, 1 open)
-	trail = { [1] = 0, [-1] = 0 },
-	tremble = 0,
-	sustainShake = 0,
-	vis = {} :: { [string]: boolean }, -- group visibility overrides for this frame
-	dissolve = 0,
-}
-
-local function resetFrame()
-	for _, n in BODY do
-		rotAcc[n] = V0
-		posAcc[n] = V0
-	end
-	F.feet[1], F.feet[-1] = V0, V0
-	F.footPitch[1], F.footPitch[-1] = 0, 0
-	F.look = nil
-	F.lookW = 0
-	F.reach[1], F.reach[-1] = nil, nil
-	F.patch = nil
-	F.capeBoost = V0
-	F.trail[1], F.trail[-1] = 0, 0
-	F.tremble = 0
-	F.sustainShake = 0
-	table.clear(F.vis)
-end
-resetFrame()
-
-local function rot(name: string, rx: number, ry: number, rz: number, w: number)
-	rotAcc[name] += Vector3.new(rx, ry, rz) * (RAD * w)
-end
-
-local function move(name: string, x: number, y: number, z: number, w: number)
-	posAcc[name] += Vector3.new(x, y, z) * (S * w)
-end
-
-local function g3(a, i: number): number
-	return if a and a[i] then a[i] else 0
-end
-
--- Adds a pose (see Poses module) with weight w.
-local function applyPose(p, w: number)
-	if not p or w <= 0 then
-		return
-	end
-	local hips = p.hips
-	if hips then
-		rot("B_Hips", g3(hips, 1), g3(hips, 2), g3(hips, 3), w)
-		move("B_Hips", g3(hips, 4), g3(hips, 5), g3(hips, 6), w)
-	end
-	for key, bone in { spine = "B_Spine", chest = "B_Chest", neck = "B_Neck", head = "B_Head" } do
-		local r = p[key]
-		if r then
-			rot(bone, g3(r, 1), g3(r, 2), g3(r, 3), w)
-		end
-	end
-	for _, side in { 1, -1 } do
-		local a = p[if side == 1 then "R" else "L"]
-		if a then
-			local names = ARM_NAMES[side]
-			if a.sh then
-				rot(names[1], g3(a.sh, 1), g3(a.sh, 2) * side, g3(a.sh, 3) * side, w)
-			end
-			if a.el then
-				rot(names[2], a.el, 0, 0, w)
-			end
-			if a.wr then
-				rot(names[3], g3(a.wr, 1), g3(a.wr, 2) * side, g3(a.wr, 3) * side, w)
-			end
-			if a.sb then
-				rot(names[4], g3(a.sb, 1), g3(a.sb, 2) * side, g3(a.sb, 3) * side, w)
-			end
-		end
-		local f = p[if side == 1 then "fR" else "fL"]
-		if f then
-			F.feet[side] += Vector3.new(g3(f, 1) * side, g3(f, 2), g3(f, 3)) * (S * w)
-			F.footPitch[side] += g3(f, 4) * RAD * w
-		end
-	end
-end
-
-local function pose(name: string)
-	return Poses[name]
-end
-
--- Keyframes: { { time, poseName, ease? }, ... }. The ease belongs to the segment ENDING at that key:
--- nil smooth, "out" snaps out (cuts), "in" accelerates into the key (impacts), "lin" linear.
-local function playKeys(keys, t: number, w: number)
-	local n = #keys
-	if n == 0 or w <= 0 then
-		return
-	end
-	if t <= keys[1][1] then
-		applyPose(pose(keys[1][2]), w)
-		return
-	end
-	if t >= keys[n][1] then
-		applyPose(pose(keys[n][2]), w)
-		return
-	end
-	local i = 2
-	while keys[i][1] < t do
-		i += 1
-	end
-	local a, b = keys[i - 1], keys[i]
-	local u = progress(a[1], b[1], t)
-	local e = b[3]
-	if e == "out" then
-		u = easeOut(u, 3)
-	elseif e == "in" then
-		u = easeIn(u, 2.2)
-	elseif e ~= "lin" then
-		u = smoother(u)
-	end
-	applyPose(pose(a[2]), w * (1 - u))
-	applyPose(pose(b[2]), w * u)
-end
-
-local function setT(rec: BoneRec?, T: CFrame)
-	if rec then
-		rec.T = T
-		rec.dirty = true
-	end
-end
-
-local function solveFK()
-	for _, rec in boneList do
-		rec.rel = rec.parent.rel * rec.C0 * rec.T
-	end
-end
-
-local function composeBody()
-	for _, n in BODY do
-		local rec = bones[n]
-		if rec then
-			local r, p = rotAcc[n], posAcc[n]
-			local T = CFrame.Angles(r.X, r.Y, r.Z)
-			if p ~= V0 then
-				T = CFrame.new(p) * T
-			end
-			if rec == hipsRec and F.corr ~= I then
-				T = rec.C0inv * F.corr * rec.C0 * T
-			end
-			setT(rec, T)
-		end
-	end
-end
-
-local function solveLegs()
-	local hipsRel = hipsRec.parent.rel * hipsRec.C0 * hipsRec.T
-	local hr = rotAcc.B_Hips
-	for _, leg in legs do
-		local target = F.corr * (leg.restAnkle + F.feet[leg.side])
-		local d = hipsRel:PointToObjectSpace(target) - leg.pivot
-		local thigh, shin, roll, shinAbs = solveLegIK(leg, d)
-		setT(leg.thigh, CFrame.Angles(thigh, 0, roll))
-		setT(leg.shin, CFrame.Angles(shin, 0, 0))
-		setT(leg.foot, CFrame.Angles(F.footPitch[leg.side] - shinAbs - hr.X, 0, -(hr.Z + roll)))
-	end
-end
-
--- Two-bone arm IK: the wrist reaches `target` (root space), the elbow bends toward `pole`.
-local function solveArm(side: number, req)
-	local a = ARM[side]
-	local sh, el, ha = a.sh, a.el, a.ha
-	if not (sh and el and ha) then
-		return
-	end
-	local Sframe = sh.parent.rel * sh.C0
-	local Sp = Sframe.Position
-	local L1 = el.C0.Position.Magnitude
-	local L2 = ha.C0.Position.Magnitude
-	local toT = req.target - Sp
-	local dist = toT.Magnitude
-	if dist < 1e-3 then
-		return
-	end
-	local u = toT / dist
-	local d = math.clamp(dist, math.abs(L1 - L2) + 0.05, L1 + L2 - 0.02)
-	local pole = req.pole or Vector3.new(side * 0.6, -1, 0.4)
-	local pd = pole - u * pole:Dot(u)
-	if pd.Magnitude < 1e-3 then
-		pd = Vector3.new(0, -1, 0) - u * (-u.Y)
-	end
-	pd = pd.Unit
-	local along = (L1 * L1 - L2 * L2 + d * d) / (2 * d)
-	local h = math.sqrt(math.max(L1 * L1 - along * along, 0))
-	local E = Sp + u * along + pd * h
-	local P = Sp + u * d
-	-- shoulder: rest (upper arm, bend direction) -> desired
-	local upLocal = el.C0.Position.Unit
-	local bendLocal = Vector3.new(0, 0, -1) - upLocal * (-upLocal.Z)
-	local upDes = (E - Sp).Unit
-	local fore = P - E
-	local bendDes = fore - upDes * fore:Dot(upDes)
-	if bendDes.Magnitude < 1e-3 then
-		bendDes = pd
-	end
-	local Mloc = frameFrom(upLocal, bendLocal)
-	local Mdes = frameFrom(upDes, bendDes.Unit)
-	local Tsh = Sframe.Rotation:Inverse() * Mdes * Mloc:Inverse()
-	-- elbow: swing the forearm onto the target
-	local Ef = Sframe * Tsh * el.C0
-	local foreLocal = ha.C0.Position.Unit
-	local want = Ef:VectorToObjectSpace(fore.Unit)
-	local axis = foreLocal:Cross(want)
-	local angle = math.acos(math.clamp(foreLocal:Dot(want), -1, 1))
-	local Tel = if axis.Magnitude > 1e-5 then CFrame.fromAxisAngle(axis.Unit, angle) else I
-	local w = clamp01(req.w)
-	setT(sh, blendPose(sh.T, Tsh, w))
-	setT(el, blendPose(el.T, Tel, w))
-end
-
--- =============================================================================================
--- 5. Base layer: stances, walk, run, breathing
--- =============================================================================================
-local gait = {
-	phase = 0,
-	walkW = 0,
-	run = 0,
-	speed = 0,
-	moveDir = Vector3.new(0, 0, -1),
-	lastVel = V0,
-	accel = V0,
-	turn = 0,
-	lastPlant = { [1] = 0, [-1] = 0 },
-}
-local springs = {
-	armR = newSpring(1.9, 0.45),
-	armL = newSpring(1.9, 0.45),
-	body = newSpring(3.2, 0.35), -- body drop on landings
-	chest = newSpring(3.0, 0.35), -- flinch when hit
-	head = newSpring(2.6, 0.35),
-}
-local look = { yaw = 0, pitch = 0 }
-
-local playSound -- forward declarations
-local footDust: ((Vector3) -> ())? = nil
 local enraged = false
 local visualRoot = hrp.CFrame
-local drawnVisual = false -- this frame's "sabers in hand" (attribute + action overrides)
+local footDust: ((Vector3) -> ())? = nil
+local F = { sustainShake = 0, dissolve = 0, vis = {} :: { [string]: boolean }, trail = { [1] = 0, [-1] = 0 } }
 
-local function impulse(spring: Spring, v: Vector3)
-	spring.v += v
-end
-
-local function evalBase(dt: number, clock: number, baseW: number, dead: boolean)
-	local cf = hrp.CFrame
-	local lv = cf:VectorToObjectSpace(hrp.AssemblyLinearVelocity)
-	if hrp.Anchored then
-		lv = V0
-	end
-	local flatV = Vector3.new(lv.X, 0, lv.Z)
-	local speed = flatV.Magnitude / S
-	local turn = if hrp.Anchored then 0 else math.abs(hrp.AssemblyAngularVelocity.Y)
-	local acc = (lv - gait.lastVel) / math.max(dt, 1 / 240)
-	gait.lastVel = lv
-	gait.accel = gait.accel:Lerp(acc, math.min(1, dt * 8))
-	gait.turn = approach(gait.turn, turn, 6, dt)
-
-	local moving = clamp01((speed - 0.8) / 4)
-	local turning = clamp01((gait.turn - 1) / 2) * 0.5
-	local want = if dead then 0 else math.max(moving, turning)
-	gait.walkW = approach(gait.walkW, want, if want > gait.walkW then 8 else 5, dt)
-	gait.run = approach(gait.run, clamp01((speed - 15) / 8), 4, dt)
-	if speed > 0.8 then
-		gait.moveDir = gait.moveDir:Lerp(flatV.Unit, math.min(1, dt * 10))
-		if gait.moveDir.Magnitude > 1e-3 then
-			gait.moveDir = gait.moveDir.Unit
-		end
-	end
-	local run = gait.run
-	local stepLen = lerp(2.3, 4.4, run) * S
-	local cadence = math.clamp(speed * S / (2 * stepLen), 0, 3.2)
-	if turning > moving then
-		cadence = math.max(cadence, 1.6)
-	end
-	if gait.walkW > 0.01 then
-		gait.phase = (gait.phase + dt * cadence) % 1
-	end
-	gait.speed = speed
-
-	local w = gait.walkW * baseW
-	local half = if cadence > 0.05 then math.min(speed * S / (4 * cadence), stepLen * 0.5) else 0
-	half *= moving
-	local p = gait.phase
-	local s1, c1 = math.sin(TAU * p), math.cos(TAU * p)
-	local c2 = math.cos(2 * TAU * p)
-
-	-- feet: stance slides back under the body, swing lifts and carries forward
-	local stanceFrac = lerp(0.55, 0.38, run)
-	for _, side in { 1, -1 } do
-		local q = (p + (if side == 1 then 0 else 0.5)) % 1
-		local along, lift, pitch
-		if q < stanceFrac then
-			along = lerp(1, -1, q / stanceFrac)
-			lift, pitch = 0, 0
-		else
-			local u = (q - stanceFrac) / (1 - stanceFrac)
-			along = lerp(-1, 1, smooth(u))
-			local arc = math.sin(math.pi * u)
-			lift = arc * (0.4 + 0.9 * run) * S
-			pitch = (arc * 16 - (1 - u) * 14 * (1 + run)) * RAD
-		end
-		F.feet[side] += gait.moveDir * (along * half * w) + Vector3.new(0, lift * w, 0)
-		F.footPitch[side] += pitch * w
-		if q < 0.05 and clock - gait.lastPlant[side] > 0.25 and w > 0.4 then
-			gait.lastPlant[side] = clock
-			impulse(springs.body, Vector3.new(0, -(0.6 + 1.2 * run) * w * S, 0))
-			if footDust and run > 0.3 then
-				for _, leg in legs do
-					if leg.side == side then
-						footDust(cf:PointToWorldSpace(leg.restAnkle + gait.moveDir * (half * w)))
-					end
-				end
-			end
-		end
-	end
-
-	-- hips and torso: a measured military walk, a hard forward lean when he sprints
-	local bob = -(0.05 + 0.07 * (0.5 + 0.5 * c2)) * (1 + 1.6 * run)
-	move("B_Hips", s1 * 0.06, bob, 0, w)
-	rot("B_Hips", 0, c1 * (6 + 4 * run), -s1 * 3, w)
-	rot("B_Chest", 0, -c1 * (7 + 5 * run), s1 * 1.5, w)
-	rot("B_Head", 1.5 * c2, c1 * 3, 0, w)
-
-	-- stances
-	local idleW = baseW * (1 - gait.walkW)
-	local walkW = w * (1 - run)
-	local runW = w * run
-	if drawnVisual then
-		applyPose(pose("guard"), idleW)
-		applyPose(pose("walkArms"), walkW)
-	else
-		applyPose(pose("attention"), idleW)
-	end
-	applyPose(pose("run"), runW)
-
-	-- arm swing through a spring (smaller with sabers in hand)
-	local amp = (if drawnVisual then 10 else 22) * (1 - run) + 26 * run
-	local swing = -c1 * amp
-	local ar = stepSpring(springs.armR, Vector3.new(swing, 0, 0) * w, dt)
-	local al = stepSpring(springs.armL, Vector3.new(-swing, 0, 0) * w, dt)
-	rot("B_ShoulderR", ar.X, 0, 0, 1)
-	rot("B_ShoulderL", al.X, 0, 0, 1)
-	rot("B_ElbowR", math.max(0, ar.X) * 0.6 + 10 * w * (1 - run), 0, 0, 1)
-	rot("B_ElbowL", math.max(0, al.X) * 0.6 + 10 * w * (1 - run), 0, 0, 1)
-
-	-- breathing, slow and controlled (faster in phase 2)
-	local breathRate = 1 / 4.2 * (if enraged then 1.4 else 1)
-	local b = math.sin(clock * TAU * breathRate)
-	local bw = baseW * (1 - 0.6 * gait.walkW)
-	move("B_Chest", 0, 0.03 * b, 0, bw)
-	rot("B_Chest", 1.0 * b, 0, 0, bw)
-	rot("B_Head", -0.6 * b, 0, 0, bw)
-
-	-- idle life: almost nothing moves (he is utterly composed); the blades turn a little
-	rot("B_Head", noise(clock * 0.15, 1.3) * 2, noise(clock * 0.11, 2.1) * 4, 0, idleW)
-	if drawnVisual then
-		rot("B_HandR", noise(clock * 0.3, 4.1) * 4, 0, noise(clock * 0.27, 4.7) * 6, idleW)
-		rot("B_HandL", noise(clock * 0.3, 5.1) * 4, 0, noise(clock * 0.27, 5.7) * 6, idleW)
-	end
-end
-
-local function applySecondary(dt: number)
-	local drop = stepSpring(springs.body, V0, dt)
-	posAcc.B_Hips += Vector3.new(0, math.clamp(drop.Y, -1.2 * S, 0.5 * S), 0)
-	rotAcc.B_Spine += Vector3.new(drop.Y * 0.1 / S, 0, 0)
-	rotAcc.B_Chest += stepSpring(springs.chest, V0, dt)
-	rotAcc.B_Head += stepSpring(springs.head, V0, dt)
-end
-
--- =============================================================================================
--- 6. Cape cloth, eyelid, eyepatch follow, prop groups
--- =============================================================================================
-local cape = {
-	state = {} :: { { a: number, va: number, s: number, vs: number } },
-	lastPos = hrp.Position,
-	lastYaw = 0,
-	vel = V0,
-	yawRate = 0,
-}
-for i = 1, #capeRows do
-	cape.state[i] = { a = 0, va = 0, s = 0, vs = 0 }
-end
-local CAPE_SHARE = { 0.22, 0.3, 0.26, 0.22 }
-
-local function solveCape(dt: number, clock: number)
-	if #capeRows == 0 then
-		return
-	end
-	-- velocity of the drawn body (follows scripted paths too)
-	local vr = visualRoot
-	local vel = (vr.Position - cape.lastPos) / math.max(dt, 1 / 240)
-	cape.lastPos = vr.Position
-	if vel.Magnitude > 200 then
-		vel = V0
-	end
-	cape.vel = cape.vel:Lerp(vel, math.min(1, dt * 10))
-	local _, yaw = vr:ToEulerAnglesYXZ()
-	local dyaw = math.atan2(math.sin(yaw - cape.lastYaw), math.cos(yaw - cape.lastYaw))
-	cape.lastYaw = yaw
-	cape.yawRate = approach(cape.yawRate, dyaw / math.max(dt, 1 / 240), 8, dt)
-	local lv = vr:VectorToObjectSpace(cape.vel) / S
-	local fwd = -lv.Z
-	local flare = math.clamp(fwd / 26, -0.25, 1.35) * 62 * RAD + math.clamp(-lv.Y / 30, -0.3, 0.8) * 40 * RAD
-	flare += math.clamp(math.abs(lv.X) / 30, 0, 0.6) * 18 * RAD
-	local side = math.clamp(-cape.yawRate * 0.1 + lv.X / 40, -0.7, 0.7)
-	local flutter = 0.03 + 0.14 * clamp01(math.abs(fwd) / 20)
-	-- keep the cape hanging under gravity whatever the torso does
-	local up = chestRec.rel.UpVector
-	local chestPitch = math.atan2(up.Z, up.Y)
-	local chestRoll = math.atan2(-up.X, up.Y)
-	local boost = F.capeBoost
-	for i, rec in capeRows do
-		local st = cape.state[i]
-		local share = CAPE_SHARE[i] or 0.2
-		local aT = flare * share + boost.X * share + noise(clock * (1.6 + 0.4 * i), 11 + i) * flutter * (0.5 + 0.3 * i)
-		local sT = side * share + boost.Z * share + noise(clock * (1.3 + 0.3 * i), 21 + i) * flutter * 0.5
-		if i == 1 then
-			aT += chestPitch
-			sT -= chestRoll
-			aT = math.max(aT, chestPitch + 2 * RAD) -- never swings forward into his legs
-		end
-		-- damped springs, sub-stepped
-		local f, z = 2.1 - 0.15 * i, 0.32
-		local wN = TAU * f
-		local n = math.max(1, math.ceil(dt * 240))
-		local h = dt / n
-		for _ = 1, n do
-			st.va += ((aT - st.a) * wN * wN - st.va * 2 * z * wN) * h
-			st.a += st.va * h
-			st.vs += ((sT - st.s) * wN * wN - st.vs * 2 * z * wN) * h
-			st.s += st.vs * h
-		end
-		st.a = math.clamp(st.a, -1.2, 1.9)
-		st.s = math.clamp(st.s, -1.2, 1.2)
-		setT(rec, CFrame.Angles(-st.a, 0, st.s))
-	end
-end
-
-local lidOpen = 0
-local function solveLid(dt: number)
-	lidOpen = approach(lidOpen, F.lid, if F.lid > lidOpen then 14 else 10, dt)
-	if lidRec then
-		setT(lidRec, CFrame.Angles(lidOpen * 88 * RAD, 0, 0))
-	end
-end
-
--- The eyepatch rides the left hand while he tears it off.
-local patchGrab: CFrame? = nil
-local function solvePatch()
-	if not patchRec then
-		return
-	end
-	local req = F.patch
-	local hand = ARM[-1].ha
-	if not req or req.w <= 0 or not hand then
-		patchGrab = nil
-		setT(patchRec, I)
-		return
-	end
-	if not patchGrab then
-		patchGrab = hand.rel:Inverse() * patchRec.rel
-	end
-	local want = hand.rel * patchGrab
-	local T = (patchRec.parent.rel * patchRec.C0):Inverse() * want
-	setT(patchRec, blendPose(I, T, req.w))
-end
-
-local groupShown: { [string]: number } = {}
-local function applyGroups(base: { [string]: boolean })
-	for _, gname in GROUP_NAMES do
-		local on = F.vis[gname]
-		if on == nil then
-			on = base[gname]
-		end
-		local ltm = if on then F.dissolve else 1
-		if groupShown[gname] ~= ltm then
-			groupShown[gname] = ltm
-			for _, p in groupParts[gname] do
-				p.LocalTransparencyModifier = ltm
-			end
-		end
-	end
-end
-
-local lastDissolve = 0
-local function applyDissolve()
-	if F.dissolve == lastDissolve then
-		return
-	end
-	lastDissolve = F.dissolve
-	for _, p in allVisualParts do
-		local g = string.match(p.Name, "^(%a+%d?)_")
-		if not (g and groupParts[g]) then
-			p.LocalTransparencyModifier = F.dissolve
-		end
-	end
-end
-
--- =============================================================================================
--- 7. Visual effects library (built-in textures only)
--- =============================================================================================
 local TEX_SMOKE = "rbxasset://textures/particles/smoke_main.dds"
 local TEX_SPARK = "rbxasset://textures/particles/sparkles_main.dds"
 local TEX_FIRE = "rbxasset://textures/particles/fire_main.dds"
@@ -1150,26 +374,6 @@ local function dustBurst(pos: Vector3, color: Color3, count: number, speed: numb
 	}, 4)
 end
 
-footDust = function(ankle: Vector3)
-	local cam = workspace.CurrentCamera
-	if not cam or (cam.CFrame.Position - ankle).Magnitude > 110 * S then
-		return
-	end
-	local g, color = groundAt(ankle, 10)
-	burst(CFrame.new(g), Vector3.new(1.6, 0.3, 1.6) * S, 4, {
-		Texture = TEX_SMOKE,
-		Color = CS(color:Lerp(C_DUST, 0.6)),
-		Size = NS(0, 0.6 * S, 1, 1.6 * S),
-		Transparency = NS(0, 0.5, 1, 1),
-		Lifetime = NR(0.4, 0.7),
-		Speed = NR(2 * S, 4 * S),
-		SpreadAngle = Vector2.new(85, 85),
-		EmissionDirection = Enum.NormalId.Top,
-		Drag = 4,
-		LightInfluence = 0.6,
-	}, 2)
-end
-
 local function sparks(pos: Vector3, color: Color3, count: number, speed: number)
 	burst(CFrame.new(pos), Vector3.one * 0.5 * S, count, {
 		Texture = TEX_SPARK,
@@ -1336,58 +540,52 @@ local function glint(pos: Vector3, size: number, color: Color3, life: number)
 	end)
 end
 
--- A neon silhouette of his body where it is right now (afterimages of his speed).
-local GHOST_NAMES = {
-	"Skull", "HairCap", "Neck", "Chest", "Back", "Abdomen", "Pelvis",
-	"DeltoidR", "UpperArmR", "ForearmR", "PalmR", "DeltoidL", "UpperArmL", "ForearmL", "PalmL",
-	"ThighR", "BlousedR", "BootFootR", "ThighL", "BlousedL", "BootFootL",
-	"SaberR_Blade2", "SaberR_Blade4", "SaberR_Blade6", "SaberL_Blade2", "SaberL_Blade4", "SaberL_Blade6",
+local function vrLook(): Vector3
+	local l = visualRoot.LookVector
+	local f = Vector3.new(l.X, 0, l.Z)
+	return if f.Magnitude > 1e-3 then f.Unit else Vector3.new(0, 0, -1)
+end
+
+local function groundUnder(): number
+	return visualRoot.Position.Y - (if humanoid then humanoid.HipHeight else 4 * S) - hrp.Size.Y / 2
+end
+
+local function bladeWorld(side: number, along: number): Vector3
+	local n = if side == 1 then "R" else "L"
+	local a, b = bonePos("B_Saber" .. n), bonePos("B_SaberTip" .. n)
+	return a:Lerp(b, 0.12 + 0.88 * along)
+end
+
+local function eyeWorld(): Vector3
+	return bonePos("B_Head") + (boneCF("B_Head"):VectorToWorldSpace(anim.bones.B_Patch and (anim.bones.B_Head.restRel:Inverse() * anim.bones.B_Patch.restRel).Position or Vector3.new(0, 0.4 * S, -0.4 * S)))
+end
+
+-- Afterimage: a neon silhouette of his current pose, built from the bones (fades in `life`).
+local GHOST = {
+	{ "B_Hips", "B_Chest", 0.9 }, { "B_Chest", "B_Neck", 0.85 }, { "B_Neck", "B_Head", 0.5 },
+	{ "B_UpperArmR", "B_ForearmR", 0.42 }, { "B_ForearmR", "B_HandR", 0.36 }, { "B_UpperArmL", "B_ForearmL", 0.42 }, { "B_ForearmL", "B_HandL", 0.36 },
+	{ "B_ThighR", "B_ShinR", 0.5 }, { "B_ShinR", "B_FootR", 0.4 }, { "B_ThighL", "B_ShinL", 0.5 }, { "B_ShinL", "B_FootL", 0.4 },
+	{ "B_SaberR", "B_SaberTipR", 0.1 }, { "B_SaberL", "B_SaberTipL", 0.1 },
 }
-local ghostSources: { BasePart } = {}
-for _, n in GHOST_NAMES do
-	local p = model:FindFirstChild(n, true)
-	if p and p:IsA("BasePart") then
-		table.insert(ghostSources, p)
-	end
-end
-
-local function copyShape(src: BasePart, props): BasePart
-	local p = Instance.new(src.ClassName) :: BasePart
-	p.Anchored = true
-	p.CanCollide = false
-	p.CanQuery = false
-	p.CanTouch = false
-	p.CastShadow = false
-	p.TopSurface = Enum.SurfaceType.Smooth
-	p.BottomSurface = Enum.SurfaceType.Smooth
-	p.Size = src.Size
-	p.CFrame = src.CFrame
-	if src:IsA("Part") and p:IsA("Part") then
-		p.Shape = src.Shape
-	end
-	local mesh = src:FindFirstChildOfClass("SpecialMesh")
-	if mesh then
-		mesh:Clone().Parent = p
-	end
-	p.Color = src.Color
-	p.Material = src.Material
-	p.Reflectance = src.Reflectance
-	assign(p, props or {})
-	p.Parent = vfxFolder
-	return p
-end
-
 local function afterimage(color: Color3, life: number, alpha: number)
 	local cam = workspace.CurrentCamera
 	if not cam or (cam.CFrame.Position - hrp.Position).Magnitude > 200 * S then
 		return
 	end
 	local parts = {}
-	for _, src in ghostSources do
-		if src.LocalTransparencyModifier < 0.5 then
-			table.insert(parts, copyShape(src, { Color = color, Material = Enum.Material.Neon, Transparency = alpha }))
+	for _, g in GHOST do
+		if anim.bones[g[1]] and anim.bones[g[2]] then
+			local a, b = bonePos(g[1]), bonePos(g[2])
+			local len = (b - a).Magnitude
+			if len > 0.05 then
+				local p = fxPart({ Shape = Enum.PartType.Cylinder, Size = Vector3.new(len + g[3] * S, g[3] * 2 * S, g[3] * 2 * S), Color = color, Material = Enum.Material.Neon, Transparency = alpha })
+				p.CFrame = CFrame.lookAt((a + b) / 2, b) * CFrame.Angles(0, math.pi / 2, 0)
+				table.insert(parts, p)
+			end
 		end
 	end
+	local head = fxPart({ Shape = Enum.PartType.Ball, Size = Vector3.one * 1.25 * S, Color = color, Material = Enum.Material.Neon, Transparency = alpha, CFrame = CFrame.new(bonePos("B_Head") + Vector3.new(0, 0.45 * S, 0)) })
+	table.insert(parts, head)
 	addFx(life, parts, function(_age, u)
 		for _, p in parts do
 			p.Transparency = alpha + (1 - alpha) * u
@@ -1395,18 +593,36 @@ local function afterimage(color: Color3, life: number, alpha: number)
 	end)
 end
 
--- Copies of a prop group as free parts (thrown saber, the cape, the eyepatch). Returns the parts and
--- their offsets from `origin` so the copy can be moved as one rigid body.
-local function propCopy(group: string, origin: CFrame): ({ BasePart }, { CFrame })
+-- Free copies of a prop group (thrown saber, the cape, the eyepatch), moved as one rigid body.
+-- Skinned meshes copied off the rig show their rest shape, placed where the bone has them now.
+local function propCopy(group: string, boneName: string): ({ BasePart }, { CFrame }, CFrame)
 	local parts, offsets = {}, {}
+	local rec = anim.bones[boneName]
+	local origin = boneCF(boneName)
+	local restWorld = hrp.CFrame * (if rec then rec.restRel else I)
 	for _, src in groupParts[group] or {} do
-		if src.Transparency < 0.99 then
-			local p = copyShape(src)
-			table.insert(parts, p)
-			table.insert(offsets, origin:ToObjectSpace(src.CFrame))
+		if src.LocalTransparencyModifier < 0.99 then
+			local ok, p = pcall(function()
+				return src:Clone()
+			end)
+			if ok and p then
+				for _, ch in p:GetChildren() do
+					if not ch:IsA("DataModelMesh") and not ch:IsA("SurfaceAppearance") then
+						ch:Destroy()
+					end
+				end
+				p.Anchored = true
+				p.CanCollide = false
+				p.CanQuery = false
+				p.CanTouch = false
+				p.LocalTransparencyModifier = 0
+				p.Parent = vfxFolder
+				table.insert(parts, p)
+				table.insert(offsets, restWorld:ToObjectSpace(src.CFrame))
+			end
 		end
 	end
-	return parts, offsets
+	return parts, offsets, origin
 end
 
 local function placeCopy(parts: { BasePart }, offsets: { CFrame }, cf: CFrame, transparency: number?)
@@ -1456,7 +672,7 @@ local function shakeApply(dt: number)
 end
 
 local soundsCfg = Config.Sounds
-playSound = function(key: string, volume: number?, pitch: number?, parent: Instance?): Sound?
+local function playSound(key: string, volume: number?, pitch: number?, parent: Instance?): Sound?
 	local id = type(soundsCfg) == "table" and soundsCfg[key] or nil
 	if type(id) ~= "string" or id == "" then
 		return nil
@@ -1474,48 +690,72 @@ playSound = function(key: string, volume: number?, pitch: number?, parent: Insta
 	return s
 end
 
--- Blade trails and the Ultimate Eye's light (created once, toggled every frame).
+footDust = function(ankle: Vector3)
+	local cam = workspace.CurrentCamera
+	if not cam or (cam.CFrame.Position - ankle).Magnitude > 110 * S then
+		return
+	end
+	local g, color = groundAt(ankle, 10)
+	burst(CFrame.new(g), Vector3.new(1.6, 0.3, 1.6) * S, 4, {
+		Texture = TEX_SMOKE,
+		Color = CS(color:Lerp(C_DUST, 0.6)),
+		Size = NS(0, 0.6 * S, 1, 1.6 * S),
+		Transparency = NS(0, 0.5, 1, 1),
+		Lifetime = NR(0.4, 0.7),
+		Speed = NR(2 * S, 4 * S),
+		SpreadAngle = Vector2.new(85, 85),
+		EmissionDirection = Enum.NormalId.Top,
+		Drag = 4,
+		LightInfluence = 0.6,
+	}, 2)
+end
+
+-- Blade trails (Trails between the saber bone and its tip bone; Bones are Attachments)
 local trails: { [number]: Trail } = {}
-for _, side in { 1, -1 } do
-	local rec = ARM[side].sb
-	if rec then
-		local a0 = rec.part:FindFirstChild("BladeBase")
-		local a1 = rec.part:FindFirstChild("BladeTip")
-		if a0 and a1 then
-			local tr = Instance.new("Trail")
-			tr.Name = "BradleyBladeTrail"
-			tr.Attachment0 = a0
-			tr.Attachment1 = a1
-			tr.Lifetime = 0.16
-			tr.MinLength = 0.05
-			tr.LightEmission = 0.8
-			tr.LightInfluence = 0
-			tr.FaceCamera = false
-			tr.Transparency = NS(0, 0.15, 1, 1)
-			tr.Color = CS(C_SLASH)
-			tr.Enabled = false
-			tr.Parent = rec.part
-			trails[side] = tr
-		end
+for side, n in { [1] = "R", [-1] = "L" } do
+	local a0, a1 = boneObjs["B_Saber" .. n], boneObjs["B_SaberTip" .. n]
+	if a0 and a1 then
+		local tr = Instance.new("Trail")
+		tr.Name = "BradleyBladeTrail"
+		tr.Attachment0 = a0
+		tr.Attachment1 = a1
+		tr.Lifetime = 0.16
+		tr.MinLength = 0.05
+		tr.LightEmission = 0.8
+		tr.LightInfluence = 0
+		tr.FaceCamera = false
+		tr.Transparency = NS(0, 0.15, 1, 1)
+		tr.Color = CS(C_SLASH)
+		tr.Enabled = false
+		tr.Parent = a0
+		trails[side] = tr
 	end
 end
 
-local eyeFx = { light = nil :: PointLight?, trail = nil :: Trail?, gui = nil :: SurfaceGui?, on = false }
+-- The Ultimate Eye: a light and a red light-trail on a small bone at the left eye
+local eyeFx = { light = nil :: PointLight?, trail = nil :: Trail?, sigil = {} :: { BasePart }, on = false }
 do
-	local a = headRec and headRec.part:FindFirstChild("UltimateEyeAttachment")
-	local ta = headRec and headRec.part:FindFirstChild("UltimateEyeTrailA")
-	local tb = headRec and headRec.part:FindFirstChild("UltimateEyeTrailB")
-	if a then
+	local head = boneObjs.B_Head
+	local patchRec, headRec = anim.bones.B_Patch, anim.bones.B_Head
+	if head and patchRec and headRec then
+		local off = (headRec.restRel:Inverse() * patchRec.restRel).Position
+		local function mk(name: string, dy: number): Bone
+			local b = Instance.new("Bone")
+			b.Name = name
+			b.CFrame = CFrame.new(off + Vector3.new(0, dy, 0) + (headRec.restRel:Inverse()).Rotation * Vector3.new(0, 0, -0.03 * S))
+			b.Parent = head
+			return b
+		end
+		local glow = mk("BradleyEyeGlow", 0)
+		local ta, tb = mk("BradleyEyeTrailA", 0.03 * S), mk("BradleyEyeTrailB", -0.03 * S)
 		local light = Instance.new("PointLight")
 		light.Color = C_RED
 		light.Range = 5 * S
 		light.Brightness = 3
 		light.Shadows = false
 		light.Enabled = false
-		light.Parent = a
+		light.Parent = glow
 		eyeFx.light = light
-	end
-	if ta and tb then
 		local tr = Instance.new("Trail")
 		tr.Attachment0 = ta
 		tr.Attachment1 = tb
@@ -1528,17 +768,18 @@ do
 		tr.Transparency = NS(0, 0, 1, 1)
 		tr.Color = CS(Color3.fromRGB(255, 90, 90), C_RED)
 		tr.Enabled = false
-		tr.Parent = headRec.part
+		tr.Parent = head
 		eyeFx.trail = tr
 	end
-	local mark = model:FindFirstChild("UltimateMark", true)
-	if mark then
-		eyeFx.gui = mark:FindFirstChildOfClass("SurfaceGui")
+	for _, p in allVisualParts do
+		if string.find(p.Name, "OuroSigil") then
+			table.insert(eyeFx.sigil, p)
+		end
 	end
 end
 
 -- =============================================================================================
--- 8. Actions
+-- 4. Actions: bookkeeping and their effects (the poses are in the Animator)
 -- =============================================================================================
 type ActionRec = {
 	name: string,
@@ -1546,25 +787,25 @@ type ActionRec = {
 	start: number,
 	speed: number,
 	cfg: any,
-	keys: any,
 	fired: { [string]: boolean },
 	w: number,
 	t: number,
 	real: number,
 	endAt: number?,
 	target: Vector3?,
+	rootTarget: Vector3?,
 	victim: number,
 	pathStr: string?,
 	path: any,
 	data: any,
+	suppress: number,
 }
 local actions: { ActionRec } = {}
 local lastActionId: any = nil
 local deathRec: ActionRec? = nil
 
 local FADE = {
-	Draw = { 0.2, 0.35 },
-	Sheathe = { 0.2, 0.4 },
+	Challenge = { 0.2, 0.4 },
 	RemoveCape = { 0.2, 0.4 },
 	RemoveEyepatch = { 0.25, 0.45 },
 	Lunge = { 0.1, 0.3 },
@@ -1575,11 +816,8 @@ local FADE = {
 	PhantomStep = { 0.15, 0.4 },
 	Death = { 0.15, 0 },
 }
-local SUPPRESS = {
-	Draw = 0.9, Sheathe = 0.9, RemoveCape = 0.85, RemoveEyepatch = 0.9, Lunge = 1, CrossCut = 1,
-	SaberThrow = 1, Cleave = 1, ThousandCuts = 1, PhantomStep = 1, Death = 1,
-}
-local SETUP, EVAL, STOP = {}, {}, {}
+local SUPPRESS = { Challenge = 0.9, RemoveCape = 0.85, RemoveEyepatch = 0.9 }
+local FX, STOP = {}, {}
 
 local function serverNow(): number
 	return workspace:GetServerTimeNow()
@@ -1592,44 +830,6 @@ local function fire(rec: ActionRec, key: string, at: number, t: number): boolean
 	end
 	rec.fired[key] = true
 	return t - at < 0.5
-end
-
-local function lookAt(p: Vector3?, w: number)
-	if p and w > F.lookW then
-		F.look = p
-		F.lookW = w
-	end
-end
-
-local function reach(side: number, target: Vector3?, w: number, pole: Vector3?)
-	if target and w > 0.001 then
-		F.reach[side] = { target = target, w = w, pole = pole }
-	end
-end
-
-local function boneWorld(rec: BoneRec?): CFrame
-	return hrp.CFrame * (if rec then rec.rel else I)
-end
-
-local function bladeWorld(side: number, along: number): Vector3
-	local rec = ARM[side].sb
-	if not rec then
-		return hrp.Position
-	end
-	-- along: 0 = guard, 1 = tip (the blade runs down the saber bone's -Z)
-	return (hrp.CFrame * rec.rel * CFrame.new(0, 0.03 * along, -(0.45 + 3.8 * along) * S)).Position
-end
-
--- The visual root (path-corrected) and its flat look direction.
-local function vrLook(): Vector3
-	local l = visualRoot.LookVector
-	local f = Vector3.new(l.X, 0, l.Z)
-	return if f.Magnitude > 1e-3 then f.Unit else Vector3.new(0, 0, -1)
-end
-
-local function groundUnder(): number
-	local feetY = visualRoot.Position.Y - (if humanoid then humanoid.HipHeight else 4 * S) - hrp.Size.Y / 2
-	return feetY
 end
 
 local function victimRoot(rec: ActionRec): BasePart?
@@ -1655,146 +855,69 @@ local function frontSlash(tilt: number, flip: boolean, radius: number, width: nu
 	slashArc(cf, radius * S, a0, a1, width * S, color or slashColor(), 0.32, 0.06)
 end
 
--- ---------------------------------------------------------------------------------------------
--- Draw: right hand to the left hilt, left hand to the right hilt, both blades out, a flourish
--- ---------------------------------------------------------------------------------------------
-SETUP.Draw = function(rec)
-	local c = rec.cfg
-	local D = c.Duration or 2.1
-	local at = c.DrawAt or 0.5
-	rec.keys = { { 0, "drawReach" }, { at - 0.05, "drawReach" }, { at + 0.22, "drawOut", "out" }, { at + 0.6, "flourish" }, { D - 0.45, "guard" }, { D, "guard" } }
-end
-EVAL.Draw = function(rec, t, w)
-	local c = rec.cfg
-	local at = c.DrawAt or 0.5
-	playKeys(rec.keys, t, w)
-	local rw = envelope(t, 0.05, at - 0.12, at, at + 0.12) * w
-	reach(1, point("hiltL"), rw, Vector3.new(0.5, -1, -0.6))
-	reach(-1, point("hiltR"), rw, Vector3.new(-0.5, -1, -0.6))
-	local out = t >= at
-	F.vis.SaberR, F.vis.SaberL = out, out
-	F.vis.HiltR, F.vis.HiltL = not out, not out
-	-- the right blade twirls once in the flourish
-	local spin = smoother(progress(at + 0.35, at + 0.8, t))
-	rot("B_SaberR", -360 * spin, 0, 0, w)
-	F.trail[1] = envelope(t, at, at + 0.05, at + 0.9, at + 1.0)
-	F.trail[-1] = envelope(t, at, at + 0.05, at + 0.35, at + 0.45)
-	lookAt(rec.target, w)
-	if fire(rec, "draw", at, t) then
-		playSound("Unsheathe", 1)
-		for _, side in { 1, -1 } do
-			sparks(bladeWorld(side, 0.1), C_GOLD, 6, 10)
-		end
-	end
-	if fire(rec, "gleam", at + 0.75, t) then
-		glint(bladeWorld(1, 0.9), 3, C_STEEL, 0.35)
+FX.Challenge = function(rec, t)
+	F.trail[1] = envelope(t, 0.4, 0.5, 0.85, 1.0)
+	if fire(rec, "gleam", 0.95, t) then
+		glint(bladeWorld(1, 0.95), 3.4, C_STEEL, 0.4)
+		playSound("Unsheathe", 1, 1.05)
 	end
 end
 
-SETUP.Sheathe = function(rec)
-	local c = rec.cfg
-	local D = c.Duration or 1.8
-	local at = c.SheatheAt or 0.85
-	rec.keys = { { 0, "guard" }, { at - 0.15, "drawReach" }, { at + 0.1, "drawReach" }, { D, "attention" } }
-end
-EVAL.Sheathe = function(rec, t, w)
-	local c = rec.cfg
-	local at = c.SheatheAt or 0.85
-	playKeys(rec.keys, t, w)
-	local rw = envelope(t, at - 0.45, at - 0.1, at + 0.05, at + 0.3) * w
-	reach(1, point("hiltL"), rw, Vector3.new(0.5, -1, -0.6))
-	reach(-1, point("hiltR"), rw, Vector3.new(-0.5, -1, -0.6))
-	local inHand = t < at
-	F.vis.SaberR, F.vis.SaberL = inHand, inHand
-	F.vis.HiltR, F.vis.HiltL = not inHand, not inHand
-	if fire(rec, "click", at, t) then
-		playSound("Unsheathe", 0.7, 0.8)
-	end
-end
-
--- ---------------------------------------------------------------------------------------------
--- Remove Cape: grabs it at the left shoulder, rips it off and flings it to his right
--- ---------------------------------------------------------------------------------------------
 local function flingCape()
-	local origin = chestRec and boneWorld(chestRec) or hrp.CFrame
-	local parts, offsets = propCopy("Cape", origin)
+	local parts, offsets, origin = propCopy("Cape", "B_Chest")
 	if #parts == 0 then
 		return
 	end
 	local vr = visualRoot
 	local state = {
 		cf = origin,
-		vel = vr.RightVector * (26 * S) + Vector3.new(0, 16 * S, 0) + vr.LookVector * (4 * S),
-		spin = vr.LookVector * 3.2 + Vector3.new(0, 1.5, 0),
+		vel = -vr.RightVector * (24 * S) + Vector3.new(0, 18 * S, 0) + vr.LookVector * (4 * S),
+		spin = vr.LookVector * -2.8 + Vector3.new(0, 1.2, 0),
 		landed = false,
 	}
-	local groundY = groundUnder()
+	local gY = groundUnder()
 	local life = 9
-	addFx(life, parts, function(age, u, dt)
+	addFx(life, parts, function(age, _u, dt)
 		if not state.landed then
-			state.vel += Vector3.new(0, -workspace.Gravity * 0.32 * dt, 0)
-			state.vel *= math.exp(-1.6 * dt)
+			state.vel += Vector3.new(0, -workspace.Gravity * 0.3 * dt, 0)
+			state.vel *= math.exp(-1.5 * dt)
 			local pos = state.cf.Position + state.vel * dt
 			local axis = state.spin
 			local rotStep = if axis.Magnitude > 1e-3 then CFrame.fromAxisAngle(axis.Unit, axis.Magnitude * dt) else I
 			local flutter = CFrame.Angles(math.sin(age * 9) * 0.04, 0, math.cos(age * 7) * 0.05)
 			state.cf = CFrame.new(pos) * rotStep * state.cf.Rotation * flutter
-			if pos.Y < groundY + 1.2 * S and age > 0.3 then
+			if pos.Y < gY + 1.4 * S and age > 0.3 then
 				state.landed = true
 			end
 		else
-			-- settles flat on the floor
-			local flat = CFrame.new(state.cf.Position.X, groundY + 0.6 * S, state.cf.Position.Z) * CFrame.Angles(-math.pi / 2, select(2, state.cf:ToEulerAnglesYXZ()), 0)
+			local flat = CFrame.new(state.cf.Position.X, gY + 0.5 * S, state.cf.Position.Z) * CFrame.Angles(-math.pi / 2, select(2, state.cf:ToEulerAnglesYXZ()), 0)
 			state.cf = state.cf:Lerp(flat, math.min(1, dt * 3))
 		end
 		placeCopy(parts, offsets, state.cf, smooth(progress(life - 2, life, age)))
 	end)
 end
 
-SETUP.RemoveCape = function(rec)
-	local c = rec.cfg
-	local D = c.Duration or 2.4
-	local rel = c.ReleaseAt or 0.9
-	rec.keys = { { 0, "guard" }, { rel - 0.4, "capeGrab" }, { rel - 0.3, "capeGrab" }, { rel + 0.08, "capeRip", "out" }, { rel + 0.45, "capeRip" }, { D, "guard" } }
-end
-EVAL.RemoveCape = function(rec, t, w)
-	local c = rec.cfg
-	local rel = c.ReleaseAt or 0.9
-	playKeys(rec.keys, t, w)
-	if claspLocal and chestRec then
-		local target = (chestRec.rel * claspLocal).Position + Vector3.new(0.05, 0.25, -0.1) * S
-		reach(1, target, envelope(t, 0.1, rel - 0.35, rel - 0.22, rel - 0.05) * w, Vector3.new(1, -0.6, 0.2))
-	end
-	-- the hand drags the cape up and out to his right before letting go
-	local pull = envelope(t, rel - 0.32, rel - 0.08, rel - 0.02, rel + 0.02)
-	F.capeBoost = Vector3.new(70 * RAD, 0, -55 * RAD) * pull
+FX.RemoveCape = function(rec, t)
+	local rel = rec.cfg.ReleaseAt or 0.95
 	F.vis.Cape = t < rel
-	F.trail[1] = envelope(t, rel - 0.2, rel - 0.1, rel + 0.2, rel + 0.3) * 0.6
-	lookAt(rec.target, w * 0.7)
+	F.trail[-1] = envelope(t, rel - 0.2, rel - 0.1, rel + 0.2, rel + 0.3) * 0.6
 	if fire(rec, "rip", rel, t) then
 		playSound("CapeTear", 1)
 		flingCape()
-		dustBurst(visualRoot.Position - Vector3.new(0, 4 * S, 0) + visualRoot.RightVector * 3 * S, C_DUST, 8, 6, 2)
+		dustBurst(visualRoot.Position - Vector3.new(0, 4 * S, 0) - visualRoot.RightVector * 3 * S, C_DUST, 8, 6, 2)
 	end
 end
 
--- ---------------------------------------------------------------------------------------------
--- Remove Eyepatch: tears it off, flicks it away, the Ultimate Eye opens
--- ---------------------------------------------------------------------------------------------
 local function tossPatch()
-	if not patchRec then
-		return
-	end
-	local origin = boneWorld(patchRec)
-	local parts, offsets = propCopy("Patch", origin)
+	local parts, offsets, origin = propCopy("Patch", "B_Patch")
 	if #parts == 0 then
 		return
 	end
 	local vr = visualRoot
 	local st = { cf = origin, vel = -vr.RightVector * (14 * S) + Vector3.new(0, 10 * S, 0) + vr.LookVector * (3 * S) }
-	local groundY = groundUnder()
+	local gY = groundUnder()
 	addFx(5, parts, function(age, _u, dt)
-		if st.cf.Position.Y > groundY + 0.05 * S then
+		if st.cf.Position.Y > gY + 0.05 * S then
 			st.vel += Vector3.new(0, -workspace.Gravity * 0.5 * dt, 0)
 			st.cf = CFrame.new(st.cf.Position + st.vel * dt) * st.cf.Rotation * CFrame.Angles(9 * dt, 5 * dt, 0)
 		end
@@ -1803,8 +926,7 @@ local function tossPatch()
 end
 
 local function eyeBurst(rec: ActionRec)
-	local eye = point("eye")
-	local eyeW = if eye then hrp.CFrame * eye else hrp.Position + Vector3.new(0, 3.3 * S, 0)
+	local eyeW = eyeWorld()
 	glint(eyeW, 9, C_RED, 0.6)
 	glint(eyeW, 4, Color3.new(1, 1, 1), 0.25)
 	local base = CFrame.new(Vector3.new(visualRoot.Position.X, groundUnder() + 0.2 * S, visualRoot.Position.Z))
@@ -1828,12 +950,8 @@ local function eyeBurst(rec: ActionRec)
 	addShake(1.0, eyeW, 25, 110)
 end
 
--- dark red aura that rises off him while the eye awakens
 local function auraEmitter(life: number)
-	if not chestRec then
-		return
-	end
-	local p = fxPart({ Size = Vector3.new(2.6, 5, 1.6) * S, Transparency = 1, CFrame = boneWorld(chestRec) })
+	local p = fxPart({ Size = Vector3.new(2.6, 5, 1.6) * S, Transparency = 1, CFrame = boneCF("B_Chest") })
 	local e = makeEmitter(p, {
 		Texture = TEX_FIRE,
 		Color = CS(C_RED, C_DARKRED),
@@ -1848,49 +966,17 @@ local function auraEmitter(life: number)
 		Enabled = true,
 	})
 	addFx(life, { p }, function(_age, u)
-		p.CFrame = boneWorld(chestRec) * CFrame.new(0, -1 * S, 0)
+		p.CFrame = boneCF("B_Chest") * CFrame.new(0, -1 * S, 0)
 		e.Rate = 60 * (1 - u)
 	end)
 end
 
-SETUP.RemoveEyepatch = function(rec)
-	local c = rec.cfg
-	local D = c.Duration or 4
-	local tear = c.TearAt or 1.05
-	local open = c.OpenAt or 2.15
-	rec.keys = {
-		{ 0, "guard" },
-		{ tear - 0.4, "patchRaise" },
-		{ tear - 0.05, "patchRaise" },
-		{ tear + 0.2, "patchTear", "out" },
-		{ open - 0.4, "psLock" },
-		{ open, "eyeOpen", "out" },
-		{ D - 0.6, "eyeOpen" },
-		{ D, "guard" },
-	}
-end
-EVAL.RemoveEyepatch = function(rec, t, w)
+FX.RemoveEyepatch = function(rec, t)
 	local c = rec.cfg
 	local tear = c.TearAt or 1.05
 	local open = c.OpenAt or 2.15
-	playKeys(rec.keys, t, w)
-	-- left hand to the patch (the wrist stops a little in front of the face)
-	local eye = point("eye")
-	if eye then
-		local target = eye + headRec.rel:VectorToWorldSpace(Vector3.new(-0.1, -0.05, -0.32) * S)
-		reach(-1, target, envelope(t, 0.15, tear - 0.4, tear - 0.02, tear + 0.15) * w, Vector3.new(-1, -0.8, 0.3))
-	end
-	-- the patch rides the hand from the grip until the flick
-	local release = tear + 0.25
-	if t >= tear - 0.18 and t < release then
-		F.patch = { w = smooth(progress(tear - 0.18, tear - 0.08, t)) }
-	end
+	local release = tear + 0.3
 	F.vis.Patch = t < release
-	-- head bows while the eye is closed, then snaps up when it opens
-	local bow = envelope(t, release, open - 0.5, open - 0.08, open + 0.05)
-	rot("B_Head", -16 * bow, 0, 0, w)
-	F.tremble = math.max(F.tremble, 0.6 * envelope(t, open - 0.8, open - 0.4, open - 0.05, open))
-	F.lid = if t >= open then 1 else 0
 	if fire(rec, "tear", tear, t) then
 		playSound("PatchTear", 1)
 	end
@@ -1903,27 +989,13 @@ EVAL.RemoveEyepatch = function(rec, t, w)
 		eyeBurst(rec)
 		auraEmitter((c.Duration or 4) - open + 0.5)
 	end
-	lookAt(rec.target, w * 0.6)
 end
 
--- ---------------------------------------------------------------------------------------------
--- Lunge
--- ---------------------------------------------------------------------------------------------
-SETUP.Lunge = function(rec)
+FX.Lunge = function(rec, t)
 	local c = rec.cfg
 	local d0, d1 = c.Dash[1], c.Dash[2]
-	rec.keys = { { 0, "guard" }, { d0 - 0.15, "lungeWind" }, { d0 - 0.02, "lungeWind" }, { d0 + 0.08, "lungeThrust", "out" }, { d1, "lungeThrust" }, { d1 + 0.25, "lungeRecover" }, { c.Duration, "guard" } }
-end
-EVAL.Lunge = function(rec, t, w)
-	local c = rec.cfg
-	local d0, d1 = c.Dash[1], c.Dash[2]
-	playKeys(rec.keys, t, w)
 	F.trail[1] = envelope(t, d0 - 0.05, d0, d1 + 0.1, d1 + 0.2)
 	F.trail[-1] = F.trail[1] * 0.5
-	F.tremble = math.max(F.tremble, 0.25 * envelope(t, d0 - 0.4, d0 - 0.25, d0 - 0.05, d0))
-	if t < d0 then
-		lookAt(rec.target, w)
-	end
 	if fire(rec, "gleam", d0 - 0.3, t) then
 		glint(bladeWorld(1, 0.95), 3.2, C_STEEL, 0.3)
 	end
@@ -1949,32 +1021,10 @@ EVAL.Lunge = function(rec, t, w)
 	end
 end
 
--- ---------------------------------------------------------------------------------------------
--- Cross Cut
--- ---------------------------------------------------------------------------------------------
-SETUP.CrossCut = function(rec)
+FX.CrossCut = function(rec, t)
 	local h = rec.cfg.Hits
-	local D = rec.cfg.Duration
-	rec.keys = {
-		{ 0, "guard" },
-		{ h[1] - 0.12, "ccRaise" },
-		{ h[1] + 0.02, "ccCut1", "out" },
-		{ h[2] - 0.12, "ccCut1" },
-		{ h[2] + 0.02, "ccCut2", "out" },
-		{ h[3] - 0.14, "ccX" },
-		{ h[3] + 0.03, "ccXCut", "out" },
-		{ h[3] + 0.3, "ccXCut" },
-		{ D, "guard" },
-	}
-end
-EVAL.CrossCut = function(rec, t, w)
-	local h = rec.cfg.Hits
-	playKeys(rec.keys, t, w)
-	F.trail[1] = envelope(t, h[1] - 0.06, h[1] - 0.02, h[1] + 0.06, h[1] + 0.12) + envelope(t, h[3] - 0.06, h[3] - 0.02, h[3] + 0.08, h[3] + 0.14)
-	F.trail[-1] = envelope(t, h[2] - 0.06, h[2] - 0.02, h[2] + 0.06, h[2] + 0.12) + envelope(t, h[3] - 0.06, h[3] - 0.02, h[3] + 0.08, h[3] + 0.14)
-	if t < h[1] then
-		lookAt(rec.target, w)
-	end
+	F.trail[1] = envelope(t, h[1] - 0.08, h[1] - 0.03, h[1] + 0.06, h[1] + 0.12) + envelope(t, h[3] - 0.08, h[3] - 0.03, h[3] + 0.08, h[3] + 0.14)
+	F.trail[-1] = envelope(t, h[2] - 0.08, h[2] - 0.03, h[2] + 0.06, h[2] + 0.12) + envelope(t, h[3] - 0.08, h[3] - 0.03, h[3] + 0.08, h[3] + 0.14)
 	if fire(rec, "h1", h[1], t) then
 		playSound("Slash", 1, 1.05)
 		frontSlash(-40, false, 5.5, 0.55)
@@ -1992,17 +1042,9 @@ EVAL.CrossCut = function(rec, t, w)
 	end
 end
 
--- ---------------------------------------------------------------------------------------------
--- Saber Throw
--- ---------------------------------------------------------------------------------------------
-local spareHiddenUntil = 0
+local spareHidden: { [string]: number } = {}
 local function throwSaber(rec: ActionRec)
-	local sb = ARM[-1].sb
-	if not sb then
-		return
-	end
-	local origin = boneWorld(sb)
-	local parts, offsets = propCopy("SaberL", origin)
+	local parts, offsets, origin = propCopy("SaberL", "B_SaberL")
 	if #parts == 0 then
 		return
 	end
@@ -2016,15 +1058,19 @@ local function throwSaber(rec: ActionRec)
 	else
 		dir = dir.Unit
 	end
+	-- the blade runs from the saber bone to the tip bone: turn the copy so that line points at the target
+	local bladeLocal = (anim.bones.B_SaberTipL and anim.bones.B_SaberL) and (anim.bones.B_SaberL.restRel:Inverse() * anim.bones.B_SaberTipL.restRel).Position or Vector3.new(0, -1, 0)
+	local bladeLen = bladeLocal.Magnitude
+	local align = CFrame.lookAt(V0, bladeLocal):Inverse()
 	local speed = (rec.cfg.Speed or 150) * S
 	local flight = dist / speed
-	local stuckGrip = impact - dir * (3.6 * S)
+	local stuck = impact - dir * (bladeLen * 0.85)
 	local life = flight + 6
 	local landed = false
 	addFx(life, parts, function(age)
 		if age < flight then
-			local p = start:Lerp(stuckGrip, age / flight)
-			placeCopy(parts, offsets, CFrame.lookAt(p, p + dir) * CFrame.Angles(0, 0, age * 40))
+			local p = start:Lerp(stuck, age / flight)
+			placeCopy(parts, offsets, CFrame.lookAt(p, p + dir) * CFrame.Angles(0, 0, age * 30) * align)
 		else
 			if not landed then
 				landed = true
@@ -2033,46 +1079,32 @@ local function throwSaber(rec: ActionRec)
 				dustBurst(g, color, 8, 8, 1.8)
 				debrisBurst(g, 6, color, material, 14 * S)
 				shockRing(CFrame.new(g + Vector3.new(0, 0.1 * S, 0)), false, 0.5 * S, 6 * S, 0.35, Color3.new(1, 1, 1), Enum.Material.Neon, 0.15 * S, 0.2 * S, 18, 0.2)
-				playSound("Impact", 0.6, 1.4, nil)
+				playSound("Impact", 0.6, 1.4)
 			end
-			placeCopy(parts, offsets, CFrame.lookAt(stuckGrip, stuckGrip + dir), smooth(progress(life - 1.2, life, age)))
+			placeCopy(parts, offsets, CFrame.lookAt(stuck, stuck + dir) * align, smooth(progress(life - 1.2, life, age)))
 		end
 	end)
-	-- a streak behind it
 	slashLine(start, impact, 0.12 * S, slashColor(), flight + 0.25, flight)
 end
 
-SETUP.SaberThrow = function(rec)
+FX.SaberThrow = function(rec, t)
 	local c = rec.cfg
 	local rl = c.ReleaseAt
 	local r0, r1 = c.Redraw[1], c.Redraw[2]
-	rec.keys = { { 0, "guard" }, { rl - 0.12, "throwWind" }, { rl + 0.06, "throwRelease", "out" }, { r0, "throwRelease" }, { r0 + 0.2, "throwReachBack" }, { r1 - 0.1, "throwReachBack" }, { c.Duration, "guard" } }
-end
-EVAL.SaberThrow = function(rec, t, w)
-	local c = rec.cfg
-	local rl = c.ReleaseAt
-	local r0, r1 = c.Redraw[1], c.Redraw[2]
-	playKeys(rec.keys, t, w)
 	local grabAt = (r0 + r1) / 2
-	reach(-1, point("spareL"), envelope(t, r0, r0 + 0.2, grabAt + 0.05, r1) * w, Vector3.new(-1, -0.4, 0.8))
 	F.vis.SaberL = t < rl or t >= grabAt
 	F.trail[-1] = envelope(t, rl - 0.12, rl - 0.06, rl, rl + 0.02)
-	if t < rl then
-		lookAt(rec.target, w)
-	end
 	if fire(rec, "release", rl, t) then
 		playSound("Throw", 1, 1.1)
 		throwSaber(rec)
 	end
-	if fire(rec, "grab", grabAt, t) then
-		spareHiddenUntil = os.clock() + 9
+	if fire(rec, "grab", grabAt, t) and #spareNames > 0 then
+		-- the fresh blade comes out of a sheathed spare: its hilt leaves the scabbard for a while
+		spareHidden[spareNames[1]] = os.clock() + 9
 		playSound("Unsheathe", 0.7, 1.15)
 	end
 end
 
--- ---------------------------------------------------------------------------------------------
--- Tank Cleaver
--- ---------------------------------------------------------------------------------------------
 local function fissure(from: Vector3, to: Vector3, width: number)
 	local dir = to - from
 	local len = dir.Magnitude
@@ -2125,21 +1157,11 @@ local function fissure(from: Vector3, to: Vector3, width: number)
 	end)
 end
 
-SETUP.Cleave = function(rec)
+FX.Cleave = function(rec, t)
 	local c = rec.cfg
 	local l0, imp = c.Leap[1], c.ImpactAt
-	rec.keys = { { 0, "guard" }, { l0 - 0.05, "cleaveCrouch" }, { l0 + 0.15, "cleaveAir", "out" }, { imp - 0.12, "cleaveAir" }, { imp, "cleaveImpact", "in" }, { imp + 0.45, "cleaveImpact" }, { c.Duration, "guard" } }
-end
-EVAL.Cleave = function(rec, t, w)
-	local c = rec.cfg
-	local l0, imp = c.Leap[1], c.ImpactAt
-	playKeys(rec.keys, t, w)
 	F.trail[1] = envelope(t, imp - 0.15, imp - 0.1, imp + 0.04, imp + 0.12)
 	F.trail[-1] = F.trail[1]
-	F.capeBoost = Vector3.new(-25 * RAD, 0, 0) * envelope(t, l0, l0 + 0.15, imp - 0.15, imp)
-	if t < l0 + 0.2 then
-		lookAt(rec.target, w)
-	end
 	if fire(rec, "jump", l0, t) then
 		local g, color = groundAt(visualRoot.Position, 12)
 		dustBurst(g, color, 10, 10, 2)
@@ -2150,38 +1172,16 @@ EVAL.Cleave = function(rec, t, w)
 		playSound("Slash", 1, 0.7)
 		local target = rec.target or (visualRoot.Position + vrLook() * 3 * S)
 		local g, color, material = groundAt(target, 14)
-		impulse(springs.body, Vector3.new(0, -5 * S, 0))
+		anim:impact(5)
 		dustBurst(g, color, 22, 16, 3.4)
 		debrisBurst(g, 14, color, material, 22 * S)
 		crackMarks(g, (c.Radius or 10) * S * 0.8, color)
 		shockRing(CFrame.new(g + Vector3.new(0, 0.15 * S, 0)), false, 1 * S, (c.Radius or 10) * S, 0.5, Color3.new(1, 1, 1), Enum.Material.Neon, 0.25 * S, 0.35 * S, 28, 0.1)
-		local fl = (c.FissureLength or 30) * S
-		fissure(g, g + vrLook() * fl, (c.FissureWidth or 6) * S)
+		fissure(g, g + vrLook() * (c.FissureLength or 30) * S, (c.FissureWidth or 6) * S)
 		local up = CFrame.lookAt(g + Vector3.new(0, 3 * S, 0), g + Vector3.new(0, 3 * S, 0) + vrLook())
 		slashArc(up * CFrame.Angles(0, 0, math.pi / 2), 5 * S, -1.2, 1.2, 0.9 * S, slashColor(), 0.35, 0.05)
 		addShake(1.1, g, 20, 110)
 	end
-end
-
--- ---------------------------------------------------------------------------------------------
--- Ultimate Eye: Thousand Cuts
--- ---------------------------------------------------------------------------------------------
-SETUP.ThousandCuts = function(rec)
-	local c = rec.cfg
-	local f0, f1 = c.Flurry[1], c.Flurry[2]
-	local n = math.max(1, c.Slashes or 12)
-	local keys = { { 0, "guard" }, { f0 - 0.45, "tcFocus" }, { f0 - 0.04, "tcFocus" } }
-	local names = { "tcA", "tcB", "tcC" }
-	for i = 1, n do
-		local at = f0 + (f1 - f0) * (i - 0.5) / n
-		table.insert(keys, { at, names[(i - 1) % 3 + 1], "out" })
-	end
-	table.insert(keys, { c.FinalAt - 0.16, "tcCross" })
-	table.insert(keys, { c.FinalAt, "tcRelease", "out" })
-	table.insert(keys, { c.Recover[1] + 0.2, "tcRelease" })
-	table.insert(keys, { c.Duration, "guard" })
-	rec.keys = keys
-	rec.data.n = n
 end
 
 local function crossWave(rec: ActionRec)
@@ -2241,30 +1241,22 @@ local function crossWave(rec: ActionRec)
 	end)
 end
 
-EVAL.ThousandCuts = function(rec, t, w, dt)
+FX.ThousandCuts = function(rec, t)
 	local c = rec.cfg
 	local f0, f1 = c.Flurry[1], c.Flurry[2]
-	local n = rec.data.n
-	playKeys(rec.keys, t, w)
-	F.lid = 1
+	local n = math.max(1, c.Slashes or 12)
 	local flurry = envelope(t, f0 - 0.05, f0, f1, f1 + 0.05)
 	F.trail[1] = math.max(flurry, envelope(t, c.FinalAt - 0.08, c.FinalAt - 0.03, c.FinalAt + 0.06, c.FinalAt + 0.12))
 	F.trail[-1] = F.trail[1]
-	F.capeBoost = Vector3.new(30 * RAD * flurry, 0, 18 * RAD * math.sin(t * 40) * flurry)
-	if t < f0 then
-		lookAt(rec.target, w)
-	end
 	if fire(rec, "focus", 0.12, t) then
-		local eye = point("eye")
-		glint(if eye then hrp.CFrame * eye else hrp.Position, 7, C_RED, 0.5)
+		glint(eyeWorld(), 7, C_RED, 0.5)
 		playSound("EyeOpen", 0.6, 1.3)
 	end
 	for i = 1, n do
 		local at = f0 + (f1 - f0) * (i - 0.5) / n
 		if fire(rec, "s" .. i, at, t) then
 			playSound("Slash", 0.7, 0.9 + math.random() * 0.4)
-			local tilt = math.random(-70, 70)
-			frontSlash(tilt, i % 2 == 0, 4 + math.random() * 3, 0.5, 0.4 + math.random() * 1.6)
+			frontSlash(math.random(-70, 70), i % 2 == 0, 4 + math.random() * 3, 0.5, 0.4 + math.random() * 1.6)
 			if i % 2 == 0 then
 				afterimage(slashColor(), 0.25, 0.6)
 			end
@@ -2283,9 +1275,6 @@ EVAL.ThousandCuts = function(rec, t, w, dt)
 	end
 end
 
--- ---------------------------------------------------------------------------------------------
--- Ultimate Eye: Phantom Step (lock-on, a pentagram of dashes, everything detonates)
--- ---------------------------------------------------------------------------------------------
 local function reticle(rec: ActionRec, life: number)
 	local parts = {}
 	local rings = {}
@@ -2329,32 +1318,19 @@ local function reticle(rec: ActionRec, life: number)
 	end)
 end
 
-SETUP.PhantomStep = function(rec)
+FX.PhantomStep = function(rec, t)
 	local c = rec.cfg
 	local s0, s1 = c.Steps[1], c.Steps[2]
-	rec.keys = { { 0, "guard" }, { 0.35, "psLock" }, { s0 - 0.04, "psLock" }, { s0 + 0.08, "psDash", "out" }, { s1 - 0.02, "psDash" }, { s1 + 0.25, "psPause" }, { c.DetonateAt + 0.15, "psPause" }, { c.Duration, "guard" } }
-	rec.data.lines = {}
-	rec.data.nextLine = 1
-end
-EVAL.PhantomStep = function(rec, t, w)
-	local c = rec.cfg
-	local s0, s1 = c.Steps[1], c.Steps[2]
-	playKeys(rec.keys, t, w)
-	F.lid = 1
+	rec.data.lines = rec.data.lines or {}
+	rec.data.nextLine = rec.data.nextLine or 1
 	local dashing = envelope(t, s0, s0 + 0.03, s1, s1 + 0.05)
 	F.trail[1] = dashing
 	F.trail[-1] = dashing
-	if t < s0 then
-		local root = victimRoot(rec)
-		lookAt(if root then root.Position else rec.target, w)
-	end
 	if fire(rec, "lock", 0.1, t) then
 		reticle(rec, s0 + 0.2)
-		local eye = point("eye")
-		glint(if eye then hrp.CFrame * eye else hrp.Position, 8, C_RED, 0.55)
+		glint(eyeWorld(), 8, C_RED, 0.55)
 		playSound("EyeOpen", 0.8, 1.15)
 	end
-	-- the cut lines: one per chord, appearing as he finishes each dash
 	local path = rec.path
 	if path and t >= s0 then
 		local real = rec.real
@@ -2395,64 +1371,46 @@ EVAL.PhantomStep = function(rec, t, w)
 	end
 end
 
--- ---------------------------------------------------------------------------------------------
--- Death: staggers, drops to one knee, lets go of his sabers, falls on his back. Then fades.
--- ---------------------------------------------------------------------------------------------
 local function dropSaber(side: number)
-	local sb = ARM[side].sb
-	if not sb then
-		return
-	end
-	local origin = boneWorld(sb)
-	local parts, offsets = propCopy(if side == 1 then "SaberR" else "SaberL", origin)
+	local n = if side == 1 then "R" else "L"
+	local parts, offsets, origin = propCopy("Saber" .. n, "B_Saber" .. n)
 	if #parts == 0 then
 		return
 	end
 	local gY = groundUnder()
 	local st = { cf = origin, vel = visualRoot.RightVector * side * 4 * S + Vector3.new(0, 4 * S, 0), spin = math.random() * 4 + 3 }
 	addFx(7, parts, function(age, _u, dt)
-		if st.cf.Position.Y > gY + 0.15 * S then
+		if st.cf.Position.Y > gY + 0.4 * S then
 			st.vel += Vector3.new(0, -workspace.Gravity * 0.6 * dt, 0)
 			st.cf = CFrame.new(st.cf.Position + st.vel * dt) * st.cf.Rotation * CFrame.Angles(st.spin * dt, 0, st.spin * 0.3 * dt)
-		else
-			local flat = CFrame.new(st.cf.Position.X, gY + 0.12 * S, st.cf.Position.Z) * CFrame.Angles(0, select(2, st.cf:ToEulerAnglesYXZ()), 0)
-			st.cf = st.cf:Lerp(flat, math.min(1, dt * 12))
 		end
 		placeCopy(parts, offsets, st.cf, smooth(progress(6, 7, age)))
 	end)
 end
 
-SETUP.Death = function(rec)
-	rec.keys = { { 0, "guard" }, { 0.45, "deathStagger" }, { 1.3, "deathKneel", "in" }, { 2.6, "deathKneel" }, { 3.35, "deathLying", "in" }, { 99, "deathLying" } }
-end
-EVAL.Death = function(rec, t, w)
-	playKeys(rec.keys, t, w)
-	local dropped = t >= 1.25
-	if dropped then
+FX.Death = function(rec, t)
+	if t >= 1.25 then
 		F.vis.SaberR, F.vis.SaberL = false, false
 	end
-	F.lid = if enraged then 1 - smooth(progress(3.4, 4.2, t)) else 0
 	if fire(rec, "voice", 0, t) then
 		playSound("Death", 1)
 	end
 	if fire(rec, "drop", 1.25, t) then
-		if drawnVisual then
-			dropSaber(1)
-			dropSaber(-1)
-		end
+		dropSaber(1)
+		dropSaber(-1)
 		local g, color = groundAt(visualRoot.Position, 12)
 		dustBurst(g, color, 8, 6, 2)
 	end
-	if fire(rec, "fall", 3.35, t) then
+	if fire(rec, "fall", 3.4, t) then
 		local g, color = groundAt(visualRoot.Position + visualRoot.LookVector * -2 * S, 12)
 		dustBurst(g, color, 14, 8, 2.6)
-		impulse(springs.body, Vector3.new(0, -2 * S, 0))
+		anim:impact(2)
 	end
 	F.dissolve = smooth(progress(5.0, 6.3, t))
 end
 
 -- =============================================================================================
--- 9. The local player: knockback, shake, screen
+-- 5. The local player: knockback, shake, screen
 -- =============================================================================================
 local function localCharacter(): (Model?, Humanoid?, BasePart?)
 	local char = localPlayer and localPlayer.Character
@@ -2623,7 +1581,7 @@ local function localEffects(dt: number, now: number)
 end
 
 -- =============================================================================================
--- 10. Anime outline, hit flash, boss bar
+-- 6. Anime outline, hit flash, boss bar
 -- =============================================================================================
 local outline: Highlight? = Instance.new("Highlight")
 outline.Name = "BradleyOutline"
@@ -2848,7 +1806,7 @@ local function updateBossBar(dt: number)
 end
 
 -- =============================================================================================
--- 11. Frame loop
+-- 7. Frame loop
 -- =============================================================================================
 local CULL_DIST = 450
 local alive = true
@@ -2863,7 +1821,7 @@ local function syncActions(now: number)
 			end
 		end
 		local name = model:GetAttribute("Action")
-		if type(name) == "string" and EVAL[name] then
+		if type(name) == "string" and name ~= "Idle" and (Animator.ACTIONS[name] or FX[name]) then
 			local start = model:GetAttribute("ActionStart")
 			if type(start) ~= "number" then
 				start = now
@@ -2878,24 +1836,19 @@ local function syncActions(now: number)
 				start = start,
 				speed = speed,
 				cfg = cfgAction(name),
-				keys = {},
 				fired = {},
 				w = 0,
 				t = (now - start) * speed,
 				real = now - start,
 				endAt = nil,
 				target = nil,
+				rootTarget = nil,
 				victim = 0,
 				pathStr = nil,
 				path = nil,
 				data = {},
+				suppress = SUPPRESS[name] or 1,
 			}
-			if SETUP[name] then
-				local ok, err = pcall(SETUP[name], rec)
-				if not ok then
-					warn("[Bradley] setup " .. name .. ": " .. tostring(err))
-				end
-			end
 			table.insert(actions, rec)
 			if name == "Death" then
 				deathRec = rec
@@ -2937,6 +1890,13 @@ local function updateActions(now: number)
 			end
 		end
 		rec.w = w
+		if rec.target then
+			rec.rootTarget = hrp.CFrame:PointToObjectSpace(rec.target)
+		end
+		local root = victimRoot(rec)
+		if root and (rec.name == "PhantomStep" or rec.name == "Challenge") then
+			rec.rootTarget = hrp.CFrame:PointToObjectSpace(root.Position)
+		end
 		if over then
 			if STOP[rec.name] then
 				STOP[rec.name](rec)
@@ -2946,9 +1906,9 @@ local function updateActions(now: number)
 	end
 end
 
--- Visual root: where the body is drawn (on the scripted path when there is one).
+-- Root correction for scripted paths: the body is drawn on the path, not on the replicated root.
 local corrState = { w = 0, cf = I }
-local function updateRootCorrection(now: number, dt: number)
+local function rootCorrection(now: number, dt: number): CFrame?
 	local want: CFrame? = nil
 	for i = #actions, 1, -1 do
 		local rec = actions[i]
@@ -2976,143 +1936,120 @@ local function updateRootCorrection(now: number, dt: number)
 		end
 	end
 	if corrState.w <= 0 then
-		F.corr = I
-	elseif corrState.w >= 1 then
-		F.corr = corrState.cf
-	else
-		F.corr = blendPose(I, corrState.cf, corrState.w)
+		return nil
 	end
-	visualRoot = hrp.CFrame * F.corr
+	return if corrState.w >= 1 then corrState.cf else I:Lerp(corrState.cf, corrState.w)
 end
 
-local function headLook(dt: number)
-	local target, w = F.look, F.lookW
-	if (not target or w < 0.05) and not deathRec then
-		local _c, _h, root = localCharacter()
-		if root then
-			local d = (root.Position - hrp.Position).Magnitude
-			target = root.Position + Vector3.new(0, 1.5, 0)
-			w = (1 - progress(40 * S, 70 * S, d)) * (1 - F.suppress)
+local spareShown: { [string]: number } = {}
+local function applyGroups(clock: number)
+	local base = {
+		SaberR = true,
+		SaberL = true,
+		Cape = model:GetAttribute("CapeOff") ~= true,
+		Patch = model:GetAttribute("EyeOpen") ~= true,
+	}
+	for _, g in spareNames do
+		base[g] = clock >= (spareHidden[g] or 0)
+	end
+	for _, gname in GROUP_NAMES do
+		local on = F.vis[gname]
+		if on == nil then
+			on = base[gname]
+		end
+		if on == nil then
+			on = true
+		end
+		local ltm = if on then F.dissolve else 1
+		if spareShown[gname] ~= ltm then
+			spareShown[gname] = ltm
+			for _, p in groupParts[gname] do
+				p.LocalTransparencyModifier = ltm
+			end
 		end
 	end
-	local ty, tp = 0, 0
-	if target and w > 0.01 then
-		local headRest = if headRec then headRec.restRel.Position else Vector3.new(0, 3.2 * S, 0)
-		local dir = visualRoot:PointToObjectSpace(target) - headRest
-		if dir.Z < 2 * S then
-			local horiz = math.sqrt(dir.X * dir.X + dir.Z * dir.Z)
-			ty = math.clamp(math.atan2(-dir.X, -dir.Z), -55 * RAD, 55 * RAD) * w
-			tp = math.clamp(math.atan2(dir.Y, horiz), -25 * RAD, 20 * RAD) * w
-		end
-	end
-	look.yaw = approach(look.yaw, ty, 7, dt)
-	look.pitch = approach(look.pitch, tp, 7, dt)
-	rotAcc.B_Head += Vector3.new(look.pitch * 0.6, look.yaw * 0.65, 0)
-	rotAcc.B_Neck += Vector3.new(look.pitch * 0.25, look.yaw * 0.2, 0)
-	rotAcc.B_Chest += Vector3.new(0, look.yaw * 0.15, 0)
 end
 
-local function applyTremble(clock: number)
-	local tr = F.tremble
-	if tr <= 0 then
+local lastDissolve = 0
+local function applyDissolve()
+	if F.dissolve == lastDissolve then
 		return
 	end
-	local tt = clock * 21
-	rotAcc.B_Chest += Vector3.new(noise(tt, 21), noise(tt, 22), noise(tt, 23)) * (1.4 * RAD * tr)
-	rotAcc.B_Head += Vector3.new(noise(tt, 24), noise(tt, 25), noise(tt, 26)) * (2 * RAD * tr)
-	rotAcc.B_HandR += Vector3.new(noise(tt, 27), 0, noise(tt, 28)) * (4 * RAD * tr)
-	rotAcc.B_HandL += Vector3.new(noise(tt, 29), 0, noise(tt, 30)) * (4 * RAD * tr)
-end
-
-local function writeMotors()
-	for _, rec in boneList do
-		if rec.dirty then
-			rec.dirty = false
-			local motor = rec.motor
-			if motor then
-				motor.Transform = rec.T
-			end
+	lastDissolve = F.dissolve
+	for _, p in allVisualParts do
+		local g = string.match(p.Name, "^(%a+%d?)_")
+		if not (g and groupParts[g]) then
+			p.LocalTransparencyModifier = F.dissolve
 		end
 	end
 end
 
--- Persistent prop state from the attributes (actions override it frame by frame).
-local function baseVisibility(clock: number): { [string]: boolean }
-	local drawn = model:GetAttribute("Drawn") == true
-	local capeOff = model:GetAttribute("CapeOff") == true
-	local eyeOpenAttr = model:GetAttribute("EyeOpen") == true
-	local spareBack = clock >= spareHiddenUntil
-	return {
-		SaberR = drawn,
-		SaberL = drawn,
-		HiltR = not drawn,
-		HiltL = not drawn,
-		Spare1 = true,
-		Spare2 = true,
-		Spare3 = spareBack,
-		Spare4 = true,
-		Cape = not capeOff,
-		Patch = not eyeOpenAttr,
-	}
-end
-
+local lastVR: CFrame? = nil
+local lastYaw = 0
 local function animate(dt: number, now: number, clock: number)
-	resetFrame()
-	local suppress = 0
-	for _, rec in actions do
-		suppress = math.max(suppress, rec.w * (SUPPRESS[rec.name] or 0.8))
-	end
-	F.suppress = suppress
-	F.lid = if model:GetAttribute("EyeOpen") == true and enraged then 1 else 0
+	table.clear(F.vis)
+	F.trail[1], F.trail[-1] = 0, 0
 	F.dissolve = 0
-	local base = baseVisibility(clock)
-	drawnVisual = base.SaberR
-	-- the newest drawing/sheathing action decides whether the blades are in hand
+	local corr = rootCorrection(now, dt)
+	visualRoot = if corr then hrp.CFrame * corr else hrp.CFrame
+	-- velocity and turn rate of the drawn body
+	local vel = V0
+	local yawRate = 0
+	local _, yaw = visualRoot:ToEulerAnglesYXZ()
+	if lastVR then
+		local v = (visualRoot.Position - lastVR.Position) / dt
+		if v.Magnitude < 400 * S then
+			vel = hrp.CFrame:VectorToObjectSpace(v)
+		end
+		yawRate = math.atan2(math.sin(yaw - lastYaw), math.cos(yaw - lastYaw)) / dt
+	end
+	lastVR = visualRoot
+	lastYaw = yaw
+	-- the local player's head (he watches you when you come close)
+	local look = nil
+	local char = localPlayer and localPlayer.Character
+	local head = char and char:FindFirstChild("Head")
+	if head and head:IsA("BasePart") and not deathRec then
+		local d = (head.Position - hrp.Position).Magnitude
+		look = { target = hrp.CFrame:PointToObjectSpace(head.Position), w = 1 - progress(40 * S, 70 * S, d) }
+	end
+	local out = anim:step({
+		dt = dt,
+		clock = clock,
+		vel = vel,
+		yawRate = yawRate,
+		vr = visualRoot,
+		corr = corr,
+		actions = actions,
+		state = {
+			combat = model:GetAttribute("Combat") == true,
+			eyeOpen = model:GetAttribute("EyeOpen") == true,
+			capeOff = model:GetAttribute("CapeOff") == true or F.vis.Cape == false,
+			enraged = enraged,
+			dead = deathRec ~= nil,
+		},
+		look = look,
+		gravity = workspace.Gravity,
+	})
+	for _, e in animBones do
+		local T = out[e[2]]
+		if T then
+			e[1].Transform = T
+		end
+	end
+	for _, ev in anim.events do
+		if ev.name == "footstep" and ev.data.run > 0.3 and footDust then
+			local n = if ev.data.side == 1 then "R" else "L"
+			footDust(bonePos("B_Toe" .. n))
+		end
+	end
 	for _, rec in actions do
-		if rec.name == "Draw" then
-			drawnVisual = rec.t >= (rec.cfg.DrawAt or 0.5)
-		elseif rec.name == "Sheathe" then
-			drawnVisual = rec.t < (rec.cfg.SheatheAt or 0.85)
+		local fx = FX[rec.name]
+		if fx and rec.w > 0 then
+			fx(rec, rec.t, rec.w)
 		end
 	end
-	updateRootCorrection(now, dt)
-	evalBase(dt, clock, 1 - suppress, deathRec ~= nil)
-	for _, rec in actions do
-		if rec.w > 0 then
-			EVAL[rec.name](rec, rec.t, rec.w, dt, now, clock)
-		end
-	end
-	headLook(dt)
-	applyTremble(clock)
-	applySecondary(dt)
-	composeBody()
-	solveLegs()
-	solveFK()
-	if F.reach[1] or F.reach[-1] then
-		for _, side in { 1, -1 } do
-			local req = F.reach[side]
-			if req then
-				solveArm(side, req)
-			end
-		end
-		solveFK()
-	end
-	solvePatch()
-	solveLid(dt)
-	solveCape(dt, clock)
-	solveFK()
-	writeMotors()
-
-	-- props, trails, the eye
-	if F.vis.SaberR == nil then
-		F.vis.SaberR = drawnVisual
-		F.vis.HiltR = not drawnVisual
-	end
-	if F.vis.SaberL == nil then
-		F.vis.SaberL = drawnVisual
-		F.vis.HiltL = not drawnVisual
-	end
-	applyGroups(base)
+	applyGroups(clock)
 	applyDissolve()
 	for side, tr in trails do
 		local on = F.trail[side] > 0.05 and F.vis[if side == 1 then "SaberR" else "SaberL"] ~= false
@@ -3121,7 +2058,7 @@ local function animate(dt: number, now: number, clock: number)
 			tr.Color = CS(slashColor())
 		end
 	end
-	local eyeOn = lidOpen > 0.5 and F.dissolve < 0.5
+	local eyeOn = model:GetAttribute("EyeOpen") == true and enraged and F.dissolve < 0.5
 	if eyeFx.on ~= eyeOn then
 		eyeFx.on = eyeOn
 		if eyeFx.light then
@@ -3130,9 +2067,12 @@ local function animate(dt: number, now: number, clock: number)
 		if eyeFx.trail then
 			eyeFx.trail.Enabled = eyeOn
 		end
+		for _, p in eyeFx.sigil do
+			p.Material = if eyeOn then Enum.Material.Neon else Enum.Material.SmoothPlastic
+		end
 	end
-	if eyeOn and eyeFx.gui then
-		eyeFx.gui.Brightness = 1.6 + 1.2 * (0.5 + 0.5 * math.sin(clock * TAU * 1.1))
+	if eyeOn and eyeFx.light then
+		eyeFx.light.Brightness = 2.5 + 1.5 * (0.5 + 0.5 * math.sin(clock * TAU * 1.1))
 	end
 end
 
@@ -3165,7 +2105,7 @@ local function onPreSimulation(dt: number)
 end
 
 -- =============================================================================================
--- 12. Lifecycle and cleanup
+-- 8. Lifecycle and cleanup
 -- =============================================================================================
 local connections: { RBXScriptConnection } = {}
 
@@ -3244,8 +2184,7 @@ if humanoid then
 	watch(humanoid.HealthChanged, function(health: number)
 		if health < lastHealth - 0.5 and not deathRec and health > 0 then
 			hitFlash = 1
-			impulse(springs.chest, Vector3.new(-0.5, (math.random() - 0.5) * 0.6, (math.random() - 0.5) * 0.4))
-			impulse(springs.head, Vector3.new(-0.6, (math.random() - 0.5) * 0.8, 0))
+			anim:flinch(1)
 		end
 		lastHealth = health
 	end)
