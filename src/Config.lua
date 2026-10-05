@@ -34,6 +34,7 @@ local Config = {
 	LeashRange = 240, -- he gives up and walks home past this
 	BossBarRange = 170, -- players this close see the boss health bar
 
+	TestPhase2 = false, -- true: 3 s after Play he drops to 49% and tears off the cape, then the eyepatch
 	RespawnTime = 30, -- seconds after death before he comes back (nil = never)
 
 	-- Sound ids. The defaults are sounds that ship with Roblox; replace or clear ("") as you like.

@@ -2092,6 +2092,8 @@ local function combatStep(v: Victim, clock: number)
 	end
 end
 
+local testDone = false
+local startClock = os.clock()
 local function think()
 	local clock = os.clock()
 	refreshRayFilter()
@@ -2099,6 +2101,29 @@ local function think()
 	if hrp.Position.Y < homePos.Y - FALL_LIMIT * scale then
 		teleportHome()
 		startReturn()
+	end
+
+	-- Config.TestPhase2: show the cape and eyepatch scenes right away (for testing in Studio)
+	if Config.TestPhase2 and not testDone and os.clock() - startClock > 3 then
+		testDone = true
+		humanoid.Health = humanoid.MaxHealth * math.min(Config.EyeHealth, 0.49)
+		lastHealth = humanoid.Health
+		if not capeOff then
+			doRemoveCape()
+		end
+		if not eyeOpen then
+			doRemoveEyepatch()
+		end
+		return
+	end
+	-- a phase change that is due plays even if nobody is in range
+	if mode ~= "Return" and not target and (pendingCape or pendingEye) then
+		if pendingCape then
+			doRemoveCape()
+		else
+			doRemoveEyepatch()
+		end
+		return
 	end
 
 	if mode == "Return" then
