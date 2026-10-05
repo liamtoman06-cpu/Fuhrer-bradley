@@ -2119,6 +2119,7 @@ local function animate(dt: number, now: number, clock: number)
 end
 
 local errorCount = 0
+local reportedRunning = false
 local function onPreSimulation(dt: number)
 	if not alive then
 		return
@@ -2143,6 +2144,15 @@ local function onPreSimulation(dt: number)
 		if errorCount <= 5 then
 			warn("[Bradley] client animation error: " .. tostring(err))
 		end
+	elseif not reportedRunning then
+		reportedRunning = true
+		local skinned = 0
+		for _, d in model:GetDescendants() do
+			if d:IsA("MeshPart") and d.HasSkinnedMesh then
+				skinned += 1
+			end
+		end
+		print(("[Bradley] client animating: %d bones, %d skinned meshes"):format(#animBones, skinned))
 	end
 end
 
