@@ -39,6 +39,19 @@ out.append("local Poses = (function()\n" + src("src/Poses.lua") + "\nend)()")
 out.append("local Animator = (function()\n" + src("src/Animator.lua") + "\nend)()")
 out.append(f"local HIPS = Vector3.new({hips[0]}, {hips[1]}, {hips[2]})")
 out.append("local DESC = { bones = {\n" + "\n".join(lines) + "\n} }")
-out.append("local SCEN = " + json.dumps(scen).replace("[", "{").replace("]", "}").replace('":', '"=').replace('{"', '{["').replace(', "', ', ["').replace('"=', '"]='))
+def to_lua(v):
+    """JSON value -> Luau table constructor."""
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"[{json.dumps(k)}] = {to_lua(x)}" for k, x in v.items()) + "}"
+    if isinstance(v, list):
+        return "{" + ", ".join(to_lua(x) for x in v) + "}"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if v is None:
+        return "nil"
+    return json.dumps(v)
+
+
+out.append("local SCEN = " + to_lua(scen))
 out.append(src("tools/luau/driver.luau"))
 print("\n".join(out))

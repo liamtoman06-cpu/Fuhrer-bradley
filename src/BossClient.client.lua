@@ -697,7 +697,7 @@ end
 
 -- Hitbox telegraphs: exactly the area an attack hits, drawn on the ground. A bright timing line runs
 -- from the inside out and reaches the edge when the hit lands (fillAt seconds); then it flashes.
-local function telegraphSector(origin: Vector3, look: Vector3, range: number, arcDeg: number, fillAt: number, life: number)
+local function telegraphSector(origin: Vector3, look: Vector3, range: number, arcDeg: number, fillAt: number, life: number, follow: (() -> (Vector3?, Vector3?))?)
 	local g = groundAt(origin, 16)
 	local yaw = math.atan2(-look.X, -look.Z)
 	local base = CFrame.new(origin.X, g.Y + 0.06 * S, origin.Z) * CFrame.Angles(0, yaw, 0) -- -Z = look
@@ -723,6 +723,12 @@ local function telegraphSector(origin: Vector3, look: Vector3, range: number, ar
 		return Vector3.new(-math.sin(a) * r, 0, -math.cos(a) * r)
 	end
 	addFxNow(life, parts, function(age, u)
+		if follow then
+			local o, l = follow()
+			if o and l then
+				base = CFrame.new(o.X, g.Y + 0.06 * S, o.Z) * CFrame.Angles(0, math.atan2(-l.X, -l.Z), 0)
+			end
+		end
 		local inA = smooth(clamp01(age / 0.12))
 		local flash = envelope(age, fillAt - 0.02, fillAt, fillAt + 0.04, fillAt + 0.2)
 		local out = smooth(progress(fillAt + 0.05, life, age))
@@ -1426,6 +1432,7 @@ type ActionRec = {
 	data: any,
 	suppress: number,
 	hilt: Vector3?,
+	origin: Vector3?, -- a throw's release point (ActionOrigin): the judged line starts here
 }
 local actions: { ActionRec } = {}
 local lastActionId: any = nil
@@ -1515,7 +1522,7 @@ local function aimLine(rec: ActionRec, boneName: string, life: number)
 	local glow = fxPart({ Color = C_RED, Material = Enum.Material.Neon, Transparency = 1 })
 	local core = fxPart({ Color = Color3.new(1, 1, 1), Material = Enum.Material.Neon, Transparency = 1 })
 	addFx(life, { glow, core }, function(age, u)
-		local a, b = bonePos(boneName), rec.target
+		local a, b = rec.origin or bonePos(boneName), rec.target
 		if not b then
 			return
 		end
@@ -1762,7 +1769,7 @@ FX.CrossCut = function(rec, t)
 		local origin = visualRoot.Position
 		local look = flatUnit((rec.target or origin + vrLook()) - origin, vrLook())
 		local fill = h[1] / rec.speed
-		telegraphSector(origin + look * (c.Step or 1.6) * S, look, (c.Range or 10) * S, c.Arc or 80, fill, fill + 0.25)
+		telegraphSector(origin + look * (c.Step or 1.6) * S, look, ((c.Range or 10) + 2 * (c.Step or 1.6)) * S, c.Arc or 80, fill, fill + 0.25)
 	end
 	local function cut(tilt: number, flip: boolean, radius: number, width: number)
 		if enraged then
@@ -1799,7 +1806,7 @@ local function throwSaber(rec: ActionRec)
 	if #parts == 0 then
 		return
 	end
-	local start = origin.Position
+	local start = rec.origin or origin.Position
 	local impact, dir, dist
 	local function aimAt(goal: Vector3)
 		impact = goal
@@ -2056,7 +2063,19 @@ FX.ThousandCuts = function(rec, t)
 		local origin = visualRoot.Position
 		local look = flatUnit((rec.target or origin + vrLook()) - origin, vrLook())
 		local fill = math.max((f0 - t) / rec.speed, 0.1)
-		telegraphSector(origin, look, (range + (c.Advance or 9)) * S, c.Arc or 85, fill, fill + (f1 - f0) / rec.speed)
+		telegraphSector(origin, look, (range + (c.Advance or 9)) * S, c.Arc or 85, fill, fill + (f1 - f0) / rec.speed, function()
+			local path = rec.path
+			if path and #path >= 2 then
+				local p0, p1 = path[1].pos, path[#path].pos
+				return p0, flatUnit(p1 - p0, vrLook())
+			end
+			local root = victimRoot(rec)
+			local tp = if root then root.Position else rec.target
+			if tp then
+				return visualRoot.Position, flatUnit(tp - visualRoot.Position, vrLook())
+			end
+			return nil, nil
+		end)
 	end
 	for i = 1, n do
 		local at = f0 + (f1 - f0) * (i - 0.5) / n
@@ -2211,7 +2230,7 @@ local function gazeBlade(rec: ActionRec?, includeHidden: boolean?)
 	gaze.parts, gaze.offsets = parts, offsets
 	gaze.align = CFrame.lookAt(V0, bladeLocal):Inverse()
 	gaze.bladeLen = bladeLocal.Magnitude
-	gaze.start = origin.Position
+	gaze.start = if rec and rec.origin then rec.origin else origin.Position
 	gaze.impact = if rec and rec.target then rec.target else origin.Position + vrLook() * 60 * S
 	local d = gaze.impact - gaze.start
 	gaze.dir = if d.Magnitude > 0.5 then d.Unit else vrLook()
@@ -2363,8 +2382,16 @@ local function sightLines(rec: ActionRec)
 		local eye = eyeWorld()
 		local pulse = 0.5 + 0.5 * math.sin(age * 18)
 		seg(sight, eye, point, 0.05 * S, if t < lock - 0.5 then 0.35 + 0.3 * pulse else 1)
-		local hand = bonePos("B_HandL")
+		local hand = if locked and rec.origin then rec.origin else bonePos("B_HandL")
 		local aimEnd = if locked then target else point
+		if locked and rec.origin and lockPoint then
+			-- the reticle on the line the throw will actually take
+			local d = target - rec.origin
+			if d.Magnitude > 0.1 then
+				local k = math.clamp((lockPoint - rec.origin):Dot(d.Unit), 0, d.Magnitude)
+				holder.CFrame = CFrame.new(rec.origin + d.Unit * k)
+			end
+		end
 		local aimOn = progress(lock - 0.6, lock - 0.3, t)
 		local flash = envelope(t, lock - 0.01, lock, lock + 0.04, lock + 0.16)
 		seg(aimGlow, hand, aimEnd, (0.12 + 0.12 * flash + (if locked then 0.06 else 0)) * S, 1 - aimOn * (if locked then 0.75 else 0.45 + 0.2 * pulse))
@@ -2984,7 +3011,7 @@ local function localEffects(dt: number, now: number)
 		if rec.name == "Cleave" then
 			if fire(rec, "knock", c.ImpactAt, t) then
 				local center = rec.target or visualRoot.Position
-				knockFrom(center, (c.Radius or 10) * S, c.Knockback or 75)
+				knockFrom(center, (c.Radius or 10) * S + 1.1, c.Knockback or 75)
 			end
 		elseif rec.name == "RemoveEyepatch" then
 			-- two heartbeats as the eye is about to open
@@ -2995,7 +3022,7 @@ local function localEffects(dt: number, now: number)
 				screen.impact = math.max(screen.impact, 0.45 * near)
 			end
 			if fire(rec, "knock", c.OpenAt, t) then
-				knockFrom(visualRoot.Position, (c.ShockRadius or 26) * S, c.Knockback or 65)
+				knockFrom(visualRoot.Position, (c.ShockRadius or 26) * S + 1.1, c.Knockback or 65)
 				screen.impact = math.max(screen.impact, near)
 			end
 			tint = math.max(tint, envelope(t, c.OpenAt - 0.05, c.OpenAt, c.Duration - 0.8, c.Duration) * near * 0.6)
@@ -3051,8 +3078,11 @@ local function localEffects(dt: number, now: number)
 				if pin.active and (t >= c.KickAt or rec.endAt) then
 					local launch: Vector3? = nil
 					local spin: Vector3? = nil
-					if t >= c.KickAt and not rec.endAt or (rec.endAt and rec.start + c.KickAt / rec.speed <= rec.endAt) then
-						local root = pin.root
+					local root = pin.root
+					local reached = root ~= nil
+						and Vector3.new(root.Position.X - visualRoot.Position.X, 0, root.Position.Z - visualRoot.Position.Z).Magnitude <= ((c.StandOff or 3.6) + 7) * S
+						and math.abs(root.Position.Y - visualRoot.Position.Y) <= 8 * S
+					if reached and (t >= c.KickAt and not rec.endAt or (rec.endAt and rec.start + c.KickAt / rec.speed <= rec.endAt)) then
 						local kd = flatUnit((if root then root.Position else visualRoot.Position) - visualRoot.Position, vrLook())
 						launch = kd * (c.Knockback or 125) + Vector3.new(0, c.KnockUp or 55, 0)
 						spin = Vector3.new(-kd.Z, 0, kd.X) * 9
@@ -3372,6 +3402,7 @@ local function syncActions(now: number)
 				real = now - start,
 				endAt = nil,
 				target = nil,
+				origin = nil,
 				rootTarget = nil,
 				victim = 0,
 				pathStr = nil,
@@ -3392,6 +3423,8 @@ local function syncActions(now: number)
 		if typeof(target) == "Vector3" then
 			newest.target = target
 		end
+		local origin = model:GetAttribute("ActionOrigin")
+		newest.origin = if typeof(origin) == "Vector3" then origin else nil
 		local victim = model:GetAttribute("ActionVictim")
 		newest.victim = if type(victim) == "number" then victim else 0
 		local ps = model:GetAttribute("ActionPath")

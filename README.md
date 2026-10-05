@@ -152,8 +152,9 @@ From then on:
   * the Thousand Cuts cone.
   A bright timing line runs out to the edge exactly when it lands.
 * The Saber Throw and Piercing Gaze show their flight line.
-* Hits are judged where each player is on their own screen, corrected for ping. If you dodged on
-  your screen, you dodged.
+* A hit only counts if it lands both where the server sees you and where you are on your own screen
+  (your position corrected for ping). If you dodged on your screen, you dodged.
+* The throws fly exactly down the line that's drawn.
 * A player's body width is counted, and the slash effects are drawn at the attacks' real reach.
 
 ### Death
@@ -225,7 +226,8 @@ These sheets are rendered offline from the real `Animator` code running on the r
   `HitRadius`, `Damage`) and `Actions.Execution` (dash and kick timings, `KickDamage`, `Knockback`).
   They must stay in sync with the camera shots, so change the timings with care.
 * **Testing:** `TestPhase2 = true` makes him drop to 49% three seconds after Play. He tears off the
-  cape and the eyepatch, then uses Piercing Gaze on the first player he targets.
+  cape and the eyepatch, then uses Piercing Gaze as soon as a player is in throwing range with
+  nothing in between. He still challenges first if he hasn't yet.
 
 Damage and targeting:
 

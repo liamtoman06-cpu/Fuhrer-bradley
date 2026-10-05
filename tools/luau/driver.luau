@@ -95,7 +95,17 @@ for ci, clip in SCEN.clips do
 				table.insert(parts, '"' .. name .. '":[' .. table.concat({ num(x), num(y), num(z), num(r00), num(r01), num(r02), num(r10), num(r11), num(r12), num(r20), num(r21), num(r22) }, ",") .. "]")
 			end
 			local vx, vy, vz = vr:GetComponents()
-			table.insert(frames, '{"t":' .. num(tt) .. ',"root":[' .. num(vx) .. "," .. num(vy) .. "," .. num(vz) .. "]," .. '"bones":{' .. table.concat(parts, ",") .. "}}")
+			-- clip.probe: root-space positions of some bones, in studs (for tuning offsets)
+			local probe = ""
+			if clip.probe then
+				local ps = {}
+				for _, name in clip.probe do
+					local p = A:pos(name) / U
+					table.insert(ps, '"' .. name .. '":[' .. num(p.X) .. "," .. num(p.Y) .. "," .. num(p.Z) .. "]")
+				end
+				probe = ',"probe":{' .. table.concat(ps, ",") .. "}"
+			end
+			table.insert(frames, '{"t":' .. num(tt) .. ',"root":[' .. num(vx) .. "," .. num(vy) .. "," .. num(vz) .. "]," .. '"bones":{' .. table.concat(parts, ",") .. "}" .. probe .. "}")
 		end
 	end
 	table.insert(out, (if ci > 1 then "," else "") .. '{"name":"' .. clip.name .. '","frames":[' .. table.concat(frames, ",") .. "]}")
